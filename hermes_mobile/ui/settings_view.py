@@ -3,6 +3,7 @@
 import flet as ft
 
 from hermes_mobile.config.settings import get_settings
+from hermes_mobile.locales import get_locale, set_locale, available_locales
 
 
 class SettingsView:
@@ -83,6 +84,15 @@ class SettingsView:
                 self._build_section(
                     "Appearance",
                     [
+                        ft.Dropdown(
+                            label="Language",
+                            value=get_locale(),
+                            options=[
+                                ft.dropdown.Option("en", "English"),
+                                ft.dropdown.Option("pt-br", "Portugues"),
+                            ],
+                            on_change=self._on_language_change,
+                        ),
                         ft.Dropdown(
                             label="Theme",
                             value=self.settings.theme,
@@ -234,6 +244,13 @@ class SettingsView:
     def _on_font_size_change(self, e):
         self.settings.font_size = int(e.control.value)
         self._save_settings()
+
+    def _on_language_change(self, e):
+        set_locale(e.control.value)
+        self._save_settings()
+        self.page.show_snack_bar(
+            ft.SnackBar(content=ft.Text("Language changed. Restart app to apply."))
+        )
 
     def _on_timeout_change(self, e):
         try:
