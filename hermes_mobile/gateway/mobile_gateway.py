@@ -649,8 +649,18 @@ class GatewayManager:
 
     async def _start_platform(self, platform: str):
         """Start a platform adapter."""
-        # TODO: Implement platform-specific adapters
-        logger.info(f"Platform {platform} adapter not yet implemented")
+        if platform == "telegram":
+            from hermes_mobile.gateway.telegram_adapter import TelegramAdapter
+
+            token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+            if not token:
+                logger.warning("TELEGRAM_BOT_TOKEN not set, skipping Telegram adapter")
+                return
+            adapter = TelegramAdapter(token=token, on_message=self.handle_message)
+            self.adapters[platform] = adapter
+            await adapter.start()
+        else:
+            logger.info("Platform %s adapter not yet implemented", platform)
 
     async def _cleanup_loop(self):
         """Periodic cleanup."""
