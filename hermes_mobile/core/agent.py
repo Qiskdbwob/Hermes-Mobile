@@ -254,7 +254,6 @@ class MobileAgent:
             try:
                 response = await self._call_model(stream=stream)
 
-
                 if stream:
                     async for chunk in response:
                         if chunk.choices[0].delta.content:
@@ -382,6 +381,8 @@ class MobileAgent:
             "session_search": self._tool_session_search,
             "memory": self._tool_memory,
             "clarify": self._tool_clarify,
+            "browser_navigate": self._tool_browser_navigate,
+            "browser_snapshot": self._tool_browser_snapshot,
         }
 
     async def _tool_web_search(self, query: str, max_results: int = 5) -> Dict[str, Any]:
@@ -474,6 +475,14 @@ class MobileAgent:
     async def _tool_clarify(self, topic: str, context: Optional[str] = None) -> Dict[str, Any]:
         """Get clarification suggestions."""
         return await clarify_tool(topic, context=context)
+
+    async def _tool_browser_navigate(self, url: str) -> Dict[str, Any]:
+        """Navigate to a URL and return page content."""
+        return await browser_navigate_tool(url)
+
+    async def _tool_browser_snapshot(self, url: str) -> Dict[str, Any]:
+        """Return a text snapshot of a web page."""
+        return await browser_snapshot_tool(url)
 
     async def _tool_calculate(self, expression: str) -> Any:
         """Calculate a mathematical expression safely."""
@@ -659,6 +668,34 @@ class MobileAgent:
                         },
                     },
                 },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "browser_navigate",
+                        "description": "Navigate to a URL and return page title, content, and links",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "url": {"type": "string", "description": "URL to navigate to"},
+                            },
+                            "required": ["url"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "browser_snapshot",
+                        "description": "Return a cleaned text snapshot of a web page",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "url": {"type": "string", "description": "URL to snapshot"},
+                            },
+                            "required": ["url"],
+                        },
+                    },
+                },
             ]
         )
 
@@ -673,7 +710,7 @@ class MobileAgent:
         """Set available tools"""
         self.tools = tools
 
-    def clear_conversation(self):
+    def _apply_compression(self) -> List[Message]:
         """Compress conversation to save token space.
 
         Returns new compressed message list.
@@ -691,13 +728,17 @@ class MobileAgent:
             elif role == "assistant":
                 new_messages.append(Message.assistant(content))
             elif role == "tool":
-                new_messages.append(Message.tool(
-                    content,
-                    msg_dict.get("tool_call_id", ""),
-                    msg_dict.get("name", "unknown"),
-                ))
+                new_messages.append(
+                    Message.tool(
+                        content,
+                        msg_dict.get("tool_call_id", ""),
+                        msg_dict.get("name", "unknown"),
+                    )
+                )
         self.messages = new_messages
-        logger.info("Compressed conversation: %d -> %d messages", len(api_messages), len(new_messages))
+        logger.info(
+            "Compressed conversation: %d -> %d messages", len(api_messages), len(new_messages)
+        )
         return new_messages
 
     def clear_conversation(self):
@@ -705,7 +746,6 @@ class MobileAgent:
         self.messages = []
         self.session_id = str(uuid.uuid4())
         self.iteration = 0
-
 
 
 def create_mobile_agent(
