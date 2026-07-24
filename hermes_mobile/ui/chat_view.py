@@ -7,6 +7,7 @@ from typing import List
 import flet as ft
 
 from hermes_mobile.core.agent import Message, ToolCall
+from hermes_mobile.locales import t
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ class ChatView:
         )
 
         self.input_field = ft.TextField(
-            hint_text="Message Hermes...",
+            hint_text=t("chat.input_placeholder"),
             multiline=True,
             min_lines=1,
             max_lines=5,

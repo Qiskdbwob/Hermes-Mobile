@@ -24,7 +24,9 @@ from hermes_mobile.ui.memory_view import MemoryView
 from hermes_mobile.ui.plugins_view import PluginsView
 from hermes_mobile.ui.settings_view import SettingsView
 from hermes_mobile.ui.skills_view import SkillsView
+from hermes_mobile.ui.skills_view import SkillsView
 from hermes_mobile.ui.tools_view import ToolsView
+
 
 logger = logging.getLogger(__name__)
 
@@ -134,28 +136,38 @@ class HermesMobileApp:
         """Build the main UI"""
         nav_destinations = [
             ft.NavigationDestination(
-                icon=ft.Icons.CHAT_OUTLINED, selected_icon=ft.Icons.CHAT, label="Chat"
+                icon=ft.Icons.CHAT_OUTLINED, selected_icon=ft.Icons.CHAT, label=t("nav.chat")
             ),
             ft.NavigationDestination(
-                icon=ft.Icons.BUILD_OUTLINED, selected_icon=ft.Icons.BUILD, label="Tools"
+                icon=ft.Icons.BUILD_OUTLINED, selected_icon=ft.Icons.BUILD, label=t("nav.tools")
             ),
             ft.NavigationDestination(
-                icon=ft.Icons.PSYCHOLOGY_OUTLINED, selected_icon=ft.Icons.PSYCHOLOGY, label="Memory"
+                icon=ft.Icons.PSYCHOLOGY_OUTLINED,
+                selected_icon=ft.Icons.PSYCHOLOGY,
+                label=t("nav.memory"),
             ),
             ft.NavigationDestination(
-                icon=ft.Icons.EXTENSION_OUTLINED, selected_icon=ft.Icons.EXTENSION, label="Skills"
+                icon=ft.Icons.EXTENSION_OUTLINED,
+                selected_icon=ft.Icons.EXTENSION,
+                label=t("nav.skills"),
             ),
             ft.NavigationDestination(
-                icon=ft.Icons.SCHEDULE_OUTLINED, selected_icon=ft.Icons.SCHEDULE, label="Cron"
+                icon=ft.Icons.SCHEDULE_OUTLINED,
+                selected_icon=ft.Icons.SCHEDULE,
+                label=t("nav.cron"),
             ),
             ft.NavigationDestination(
-                icon=ft.Icons.HUB_OUTLINED, selected_icon=ft.Icons.HUB, label="Gateway"
+                icon=ft.Icons.HUB_OUTLINED, selected_icon=ft.Icons.HUB, label=t("nav.gateway")
             ),
             ft.NavigationDestination(
-                icon=ft.Icons.EXTENSION_OUTLINED, selected_icon=ft.Icons.EXTENSION, label="Plugins"
+                icon=ft.Icons.EXTENSION_OUTLINED,
+                selected_icon=ft.Icons.EXTENSION,
+                label=t("nav.plugins"),
             ),
             ft.NavigationDestination(
-                icon=ft.Icons.SETTINGS_OUTLINED, selected_icon=ft.Icons.SETTINGS, label="Settings"
+                icon=ft.Icons.SETTINGS_OUTLINED,
+                selected_icon=ft.Icons.SETTINGS,
+                label=t("nav.settings"),
             ),
         ]
 

@@ -1,0 +1,126 @@
+{
+  "app": {
+    "title": "Hermes Mobile",
+    "version": "v0.1.0",
+    "tagline": "Assistente IA"
+  },
+  "nav": {
+    "chat": "Chat",
+    "settings": "Configuracoes",
+    "tools": "Ferramentas",
+    "skills": "Skills",
+    "memory": "Memoria",
+    "cron": "Tarefas",
+    "gateway": "Gateway",
+    "plugins": "Plugins"
+  },
+  "chat": {
+    "welcome": "Bem-vindo ao Hermes Mobile! Sou seu assistente IA.",
+    "welcome_subtitle": "Como posso ajudar hoje?",
+    "input_placeholder": "Digite uma mensagem...",
+    "send": "Enviar",
+    "thinking": "Pensando...",
+    "tool_calling": "Usando {tool}...",
+    "tool_result": "Resultado de {tool}:",
+    "error": "Erro",
+    "clear_chat": "Limpar Chat",
+    "new_session": "Nova Sessao"
+  },
+  "settings": {
+    "title": "Configuracoes",
+    "provider": "Provedor",
+    "model": "Modelo",
+    "api_key": "Chave API",
+    "temperature": "Temperatura",
+    "max_tokens": "Tokens Maximos",
+    "streaming": "Streaming",
+    "show_tool_calls": "Mostrar Chamadas de Ferramentas",
+    "memory": "Memoria",
+    "encrypt_memory": "Criptografar Memoria",
+    "theme": "Tema",
+    "font_size": "Tamanho da Fonte",
+    "advanced": "Avancado",
+    "request_timeout": "Timeout (s)",
+    "max_retries": "Tentativas Maximas",
+    "clear_data": "Limpar Todos os Dados",
+    "save": "Salvar",
+    "saved": "Configuracoes salvas",
+    "light": "Claro",
+    "dark": "Escuro",
+    "system": "Sistema"
+  },
+  "gateway": {
+    "title": "Gateway",
+    "enabled": "Ativado",
+    "port": "Porta",
+    "platforms": "Plataformas",
+    "pairing": "Pareamento",
+    "status": "Status",
+    "running": "Executando",
+    "stopped": "Parado",
+    "start": "Iniciar",
+    "stop": "Parar",
+    "pairing_code": "Codigo de Pareamento",
+    "pair_instructions": "Envie este codigo para o bot parear seu dispositivo",
+    "no_code": "Nenhum codigo de pareamento ativo",
+    "approved": "Usuario aprovado",
+    "revoked": "Pareamento revogado"
+  },
+  "memory": {
+    "title": "Memoria",
+    "conversations": "Conversas",
+    "entries": "Entradas",
+    "search": "Buscar",
+    "no_results": "Nenhum resultado",
+    "delete": "Excluir",
+    "confirm_delete": "Confirmar exclusao"
+  },
+  "cron": {
+    "title": "Tarefas Agendadas",
+    "no_jobs": "Nenhuma tarefa agendada",
+    "interval": "Intervalo",
+    "last_run": "Ultima Execucao",
+    "next_run": "Proxima Execucao",
+    "status": "Status",
+    "add": "Adicionar Tarefa",
+    "remove": "Remover",
+    "pause": "Pausar",
+    "resume": "Retomar"
+  },
+  "tools": {
+    "title": "Ferramentas",
+    "available": "Ferramentas Disponiveis",
+    "active": "Ativa",
+    "inactive": "Inativa",
+    "no_tools": "Nenhuma ferramenta configurada"
+  },
+  "skills": {
+    "title": "Skills",
+    "installed": "Skills Instaladas",
+    "marketplace": "Mercado",
+    "install": "Instalar",
+    "remove": "Remover",
+    "no_skills": "Nenhuma skill instalada"
+  },
+  "plugins": {
+    "title": "Plugins",
+    "directory": "Diretorio de Plugins",
+    "load": "Carregar",
+    "unload": "Descarregar",
+    "no_plugins": "Nenhum plugin carregado"
+  },
+  "common": {
+    "ok": "OK",
+    "cancel": "Cancelar",
+    "confirm": "Confirmar",
+    "close": "Fechar",
+    "back": "Voltar",
+    "loading": "Carregando...",
+    "yes": "Sim",
+    "no": "Nao",
+    "on": "Ligado",
+    "off": "Desligado",
+    "enabled": "Ativado",
+    "disabled": "Desativado"
+  }
+}

@@ -1,0 +1,126 @@
+{
+  "app": {
+    "title": "Hermes Mobile",
+    "version": "v0.1.0",
+    "tagline": "AI Assistant"
+  },
+  "nav": {
+    "chat": "Chat",
+    "settings": "Settings",
+    "tools": "Tools",
+    "skills": "Skills",
+    "memory": "Memory",
+    "cron": "Cron",
+    "gateway": "Gateway",
+    "plugins": "Plugins"
+  },
+  "chat": {
+    "welcome": "Welcome to Hermes Mobile! I'm your AI assistant.",
+    "welcome_subtitle": "How can I help you today?",
+    "input_placeholder": "Type a message...",
+    "send": "Send",
+    "thinking": "Thinking...",
+    "tool_calling": "Using {tool}...",
+    "tool_result": "Result from {tool}:",
+    "error": "Error",
+    "clear_chat": "Clear Chat",
+    "new_session": "New Session"
+  },
+  "settings": {
+    "title": "Settings",
+    "provider": "Provider",
+    "model": "Model",
+    "api_key": "API Key",
+    "temperature": "Temperature",
+    "max_tokens": "Max Tokens",
+    "streaming": "Streaming",
+    "show_tool_calls": "Show Tool Calls",
+    "memory": "Memory",
+    "encrypt_memory": "Encrypt Memory",
+    "theme": "Theme",
+    "font_size": "Font Size",
+    "advanced": "Advanced",
+    "request_timeout": "Request Timeout (s)",
+    "max_retries": "Max Retries",
+    "clear_data": "Clear All Data",
+    "save": "Save",
+    "saved": "Settings saved",
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
+  },
+  "gateway": {
+    "title": "Gateway",
+    "enabled": "Enabled",
+    "port": "Port",
+    "platforms": "Platforms",
+    "pairing": "Pairing",
+    "status": "Status",
+    "running": "Running",
+    "stopped": "Stopped",
+    "start": "Start",
+    "stop": "Stop",
+    "pairing_code": "Pairing Code",
+    "pair_instructions": "Send this code to the bot to pair your device",
+    "no_code": "No active pairing codes",
+    "approved": "User approved",
+    "revoked": "Pairing revoked"
+  },
+  "memory": {
+    "title": "Memory",
+    "conversations": "Conversations",
+    "entries": "Entries",
+    "search": "Search",
+    "no_results": "No results found",
+    "delete": "Delete",
+    "confirm_delete": "Confirm deletion"
+  },
+  "cron": {
+    "title": "Scheduled Jobs",
+    "no_jobs": "No scheduled jobs",
+    "interval": "Interval",
+    "last_run": "Last Run",
+    "next_run": "Next Run",
+    "status": "Status",
+    "add": "Add Job",
+    "remove": "Remove",
+    "pause": "Pause",
+    "resume": "Resume"
+  },
+  "tools": {
+    "title": "Tools",
+    "available": "Available Tools",
+    "active": "Active",
+    "inactive": "Inactive",
+    "no_tools": "No tools configured"
+  },
+  "skills": {
+    "title": "Skills",
+    "installed": "Installed Skills",
+    "marketplace": "Marketplace",
+    "install": "Install",
+    "remove": "Remove",
+    "no_skills": "No skills installed"
+  },
+  "plugins": {
+    "title": "Plugins",
+    "directory": "Plugin Directory",
+    "load": "Load",
+    "unload": "Unload",
+    "no_plugins": "No plugins loaded"
+  },
+  "common": {
+    "ok": "OK",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "close": "Close",
+    "back": "Back",
+    "loading": "Loading...",
+    "yes": "Yes",
+    "no": "No",
+    "on": "On",
+    "off": "Off",
+    "enabled": "Enabled",
+    "disabled": "Disabled"
+  }
+}
