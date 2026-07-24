@@ -10,6 +10,15 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from hermes_mobile.config.settings import get_settings
+from hermes_mobile.core.context_compressor import compress_messages, needs_compression
+from hermes_mobile.tools.agent_tools import (
+    clarify_tool,
+    memory_tool,
+    session_search_tool,
+)
+from hermes_mobile.tools.path_security import validate_and_resolve_path
+from hermes_mobile.tools.security import safe_calculate
+from hermes_mobile.tools.web_tools import web_extract_tool, web_search_tool
 
 logger = logging.getLogger(__name__)
 
@@ -237,8 +246,14 @@ class MobileAgent:
         while self.iteration < self.max_iterations:
             self.iteration += 1
 
+            api_messages = self.get_messages_for_api()
+            if needs_compression(api_messages, self.settings.max_tokens):
+                self.messages = self._apply_compression()
+                api_messages = self.get_messages_for_api()
+
             try:
                 response = await self._call_model(stream=stream)
+
 
                 if stream:
                     async for chunk in response:
@@ -357,39 +372,54 @@ class MobileAgent:
     def _builtin_tools(self) -> Dict[str, Callable]:
         return {
             "web_search": self._tool_web_search,
+            "web_extract": self._tool_web_extract,
             "read_file": self._tool_read_file,
             "write_file": self._tool_write_file,
             "list_files": self._tool_list_files,
             "run_command": self._tool_run_command,
             "get_time": self._tool_get_time,
             "calculate": self._tool_calculate,
+            "session_search": self._tool_session_search,
+            "memory": self._tool_memory,
+            "clarify": self._tool_clarify,
         }
 
     async def _tool_web_search(self, query: str, max_results: int = 5) -> Dict[str, Any]:
-        """Search the web"""
-        # TODO: Implement web search
-        return {"results": [], "query": query}
+        """Search the web using DuckDuckGo."""
+        return await web_search_tool(query, max_results=max_results)
 
     async def _tool_read_file(self, path: str) -> str:
-        """Read a file"""
+        """Read a file with path security validation."""
+        resolved, error = validate_and_resolve_path(path)
+        if error:
+            return f"Error: {error}"
         try:
-            return Path(path).expanduser().read_text()
+            return resolved.read_text()
         except Exception as e:
             return f"Error reading file: {e}"
 
     async def _tool_write_file(self, path: str, content: str) -> str:
-        """Write a file"""
+        """Write a file with path security validation."""
+        resolved, error = validate_and_resolve_path(path)
+        if error:
+            return f"Error: {error}"
         try:
-            Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
-            Path(path).expanduser().write_text(content)
-            return f"File written to {path}"
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            resolved.write_text(content)
+            return f"File written to {resolved}"
         except Exception as e:
             return f"Error writing file: {e}"
 
     async def _tool_list_files(self, path: str = ".") -> List[str]:
-        """List files in a directory"""
+        """List files in a directory with path security."""
+        if path == ".":
+            resolved = Path.cwd()
+        else:
+            resolved, error = validate_and_resolve_path(path)
+            if error:
+                return [f"Error: {error}"]
         try:
-            return [str(p) for p in Path(path).expanduser().iterdir()]
+            return [str(p) for p in resolved.iterdir()]
         except Exception as e:
             return [f"Error: {e}"]
 
@@ -415,13 +445,39 @@ class MobileAgent:
         """Get current time"""
         return datetime.now().isoformat()
 
+    async def _tool_web_extract(self, urls: List[str], format: str = "text") -> Dict[str, Any]:
+        """Extract content from web pages."""
+        return await web_extract_tool(urls, format=format)
+
+    async def _tool_session_search(self, query: str, limit: int = 5) -> Dict[str, Any]:
+        """Search past conversation sessions."""
+        return await session_search_tool(query, limit=limit, memory_provider=self.memory_provider)
+
+    async def _tool_memory(
+        self,
+        action: str,
+        key: Optional[str] = None,
+        value: Optional[str] = None,
+        query: Optional[str] = None,
+        limit: int = 5,
+    ) -> Dict[str, Any]:
+        """Store and retrieve memory entries."""
+        return await memory_tool(
+            action=action,
+            key=key,
+            value=value,
+            query=query,
+            limit=limit,
+            memory_provider=self.memory_provider,
+        )
+
+    async def _tool_clarify(self, topic: str, context: Optional[str] = None) -> Dict[str, Any]:
+        """Get clarification suggestions."""
+        return await clarify_tool(topic, context=context)
+
     async def _tool_calculate(self, expression: str) -> Any:
-        """Calculate a mathematical expression"""
-        try:
-            # Safe evaluation
-            return eval(expression, {"__builtins__": {}}, {})
-        except Exception as e:
-            return f"Error: {e}"
+        """Calculate a mathematical expression safely."""
+        return safe_calculate(expression)
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         """Get tool schemas for the model"""
@@ -528,6 +584,81 @@ class MobileAgent:
                         },
                     },
                 },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "web_extract",
+                        "description": "Extract text content from web pages",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "urls": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "List of URLs to extract",
+                                },
+                                "format": {
+                                    "type": "string",
+                                    "enum": ["text", "markdown"],
+                                    "default": "text",
+                                },
+                            },
+                            "required": ["urls"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "session_search",
+                        "description": "Search past conversation sessions for relevant context",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string", "description": "Search query"},
+                                "limit": {"type": "integer", "default": 5},
+                            },
+                            "required": ["query"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "memory",
+                        "description": "Store and retrieve information in long-term memory",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "action": {
+                                    "type": "string",
+                                    "enum": ["store", "retrieve", "search", "list", "delete"],
+                                    "description": "Memory action",
+                                },
+                                "key": {"type": "string", "description": "Memory key"},
+                                "value": {"type": "string", "description": "Value to store"},
+                                "query": {"type": "string", "description": "Search query"},
+                                "limit": {"type": "integer", "default": 5},
+                            },
+                            "required": ["action"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "clarify",
+                        "description": "Get clarification suggestions for ambiguous requests",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "topic": {"type": "string", "description": "Topic to clarify"},
+                                "context": {"type": "string", "description": "Additional context"},
+                            },
+                            "required": ["topic"],
+                        },
+                    },
+                },
             ]
         )
 
@@ -543,10 +674,38 @@ class MobileAgent:
         self.tools = tools
 
     def clear_conversation(self):
+        """Compress conversation to save token space.
+
+        Returns new compressed message list.
+        """
+        api_messages = self.get_messages_for_api()
+        compressed = compress_messages(api_messages, self.settings.max_tokens)
+        new_messages = []
+        for msg_dict in compressed:
+            role = msg_dict["role"]
+            content = msg_dict.get("content", "")
+            if role == "system":
+                new_messages.append(Message.system(content))
+            elif role == "user":
+                new_messages.append(Message.user(content))
+            elif role == "assistant":
+                new_messages.append(Message.assistant(content))
+            elif role == "tool":
+                new_messages.append(Message.tool(
+                    content,
+                    msg_dict.get("tool_call_id", ""),
+                    msg_dict.get("name", "unknown"),
+                ))
+        self.messages = new_messages
+        logger.info("Compressed conversation: %d -> %d messages", len(api_messages), len(new_messages))
+        return new_messages
+
+    def clear_conversation(self):
         """Clear conversation history"""
         self.messages = []
         self.session_id = str(uuid.uuid4())
         self.iteration = 0
+
 
 
 def create_mobile_agent(

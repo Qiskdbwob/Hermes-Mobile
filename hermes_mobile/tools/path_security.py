@@ -1,0 +1,72 @@
+"""Path security validation helpers.
+
+Extracts the resolve() + relative_to() and .. traversal check
+patterns from Hermes Desktop path_security.py.
+"""
+
+from pathlib import Path
+from typing import Optional
+
+
+def validate_within_dir(path: Path, root: Path) -> Optional[str]:
+    """Ensure *path* resolves to a location within *root*.
+
+    Returns an error message string if validation fails, or None if the
+    path is safe. Uses Path.resolve() to follow symlinks and normalize
+    .. components.
+    """
+    try:
+        resolved = path.resolve()
+        root_resolved = root.resolve()
+        resolved.relative_to(root_resolved)
+    except (ValueError, OSError) as exc:
+        return f"Path escapes allowed directory: {exc}"
+    return None
+
+
+def has_traversal_component(path_str: str) -> bool:
+    """Return True if *path_str* contains .. traversal components."""
+    parts = Path(path_str).parts
+    return ".." in parts
+
+
+def get_safe_home_dir() -> Path:
+    """Get the home directory safely."""
+    try:
+        return Path.home()
+    except Exception:
+        return Path.cwd()
+
+
+def get_allowed_directories() -> list[Path]:
+    """Get the list of directories the agent is allowed to access."""
+    home = get_safe_home_dir()
+    allowed = [
+        home / "Documents",
+        home / "Downloads",
+        home / "Desktop",
+    ]
+    return [d for d in allowed if d.exists()]
+
+
+def validate_and_resolve_path(raw_path: str) -> tuple[Optional[Path], Optional[str]]:
+    """Validate and resolve a user-provided path.
+
+    Returns (resolved_path, error_message). One will always be None.
+    """
+    path = Path(raw_path).expanduser()
+
+    if has_traversal_component(raw_path):
+        return None, "Path traversal detected: '..' components are not allowed"
+
+    try:
+        resolved = path.resolve()
+    except OSError as exc:
+        return None, f"Cannot resolve path: {exc}"
+
+    allowed = get_allowed_directories()
+    for root in allowed:
+        if validate_within_dir(resolved, root) is None:
+            return resolved, None
+
+    return None, f"Path '{raw_path}' is outside allowed directories"
