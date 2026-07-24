@@ -12,6 +12,8 @@ from typing import Any, Callable, Dict, List, Optional
 from hermes_mobile.config.settings import get_settings
 from hermes_mobile.core.context_compressor import compress_messages, needs_compression
 from hermes_mobile.core.delegation import delegate_parallel_tasks
+from hermes_mobile.core.prompt_caching import apply_cache_control, supports_caching
+
 
 from hermes_mobile.tools.agent_tools import (
     clarify_tool,
@@ -233,6 +235,9 @@ class MobileAgent:
             if msg.name:
                 api_msg["name"] = msg.name
             messages.append(api_msg)
+
+        if supports_caching(self.settings.default_provider):
+            messages = apply_cache_control(messages, self.settings.default_provider)
 
         return messages
 
