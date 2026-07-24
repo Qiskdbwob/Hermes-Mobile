@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+*.so
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Buildozer (alternative build system)
+.buildozer/
+bin/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Hermes Mobile runtime data
+.hermes_mobile/
+memory.db
+
+# Environment example is checked in, actual .env is NOT
+.env
+!.env.example
+
+# Ruff cache
+.ruff_cache/
+
+# Logs
+*.log
+build.log
