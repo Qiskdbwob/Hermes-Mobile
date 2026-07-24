@@ -198,24 +198,9 @@ class MobileAgent:
         self.add_message(Message.tool(content, tool_call_id, name))
 
     def get_messages_for_api(self) -> List[Dict[str, Any]]:
-        """Get messages formatted for API call"""
+        """Get messages in API format with caching if supported."""
         messages = [{"role": "system", "content": self.system_prompt}]
 
-        # Add relevant memory context if available
-        if self.memory_provider and self.messages:
-            context = self.memory_provider.get_relevant_context(
-                self.messages[-1].content,
-                limit=5,
-            )
-            if context:
-                messages.append(
-                    {
-                        "role": "system",
-                        "content": f"Relevant context from memory:\n{context}",
-                    }
-                )
-
-        # Add conversation messages
         for msg in self.messages:
             api_msg = {"role": msg.role, "content": msg.content}
             if msg.tool_calls:
