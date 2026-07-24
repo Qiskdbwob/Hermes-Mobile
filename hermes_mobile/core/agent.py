@@ -11,6 +11,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from hermes_mobile.config.settings import get_settings
 from hermes_mobile.core.context_compressor import compress_messages, needs_compression
+from hermes_mobile.core.delegation import delegate_parallel_tasks
+
 from hermes_mobile.tools.agent_tools import (
     clarify_tool,
     memory_tool,
@@ -383,6 +385,7 @@ class MobileAgent:
             "clarify": self._tool_clarify,
             "browser_navigate": self._tool_browser_navigate,
             "browser_snapshot": self._tool_browser_snapshot,
+            "delegate_tasks": self._tool_delegate_tasks,
         }
 
     async def _tool_web_search(self, query: str, max_results: int = 5) -> Dict[str, Any]:
@@ -483,6 +486,12 @@ class MobileAgent:
     async def _tool_browser_snapshot(self, url: str) -> Dict[str, Any]:
         """Return a text snapshot of a web page."""
         return await browser_snapshot_tool(url)
+
+    async def _tool_delegate_tasks(
+        self, tasks: List[str], context: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Run multiple independent tasks in parallel using subagents."""
+        return await delegate_parallel_tasks(tasks, context=context)
 
     async def _tool_calculate(self, expression: str) -> Any:
         """Calculate a mathematical expression safely."""
@@ -693,6 +702,28 @@ class MobileAgent:
                                 "url": {"type": "string", "description": "URL to snapshot"},
                             },
                             "required": ["url"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "delegate_tasks",
+                        "description": "Run multiple independent tasks in parallel using subagents (max 3)",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "tasks": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "List of task descriptions",
+                                },
+                                "context": {
+                                    "type": "string",
+                                    "description": "Optional shared context",
+                                },
+                            },
+                            "required": ["tasks"],
                         },
                     },
                 },
