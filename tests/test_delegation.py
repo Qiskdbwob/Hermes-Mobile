@@ -138,6 +138,80 @@ class TestQuickToolCall:
                 assert "1 results" in result
                 mock_search.assert_called_once()
 
+    async def test_tool_call_no_results(self):
+        """When the tool is not web_search, no tool_results should be appended."""
+        with patch("hermes_mobile.core.delegation.httpx.AsyncClient") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.post = AsyncMock(
+                return_value=_make_mock_response(
+                    content="Not searching",
+                    tool_calls=[
+                        {
+                            "function": {
+                                "name": "some_unknown_tool",
+                                "arguments": '{"query": "test"}',
+                            }
+                        }
+                    ],
+                )
+            )
+
+            result = await _quick_tool_call(
+                provider_url="https://api.openai.com/v1",
+                api_key="sk-test",
+                model="gpt-4o",
+                system_prompt="You are helpful.",
+                user_prompt="Do something",
+                available_tools=[{"type": "function", "function": {"name": "some_unknown_tool"}}],
+            )
+            # No tool_results block added, just the original content
+            assert result == "Not searching"
+
+    async def test_generic_exception(self):
+        with patch("hermes_mobile.core.delegation.httpx.AsyncClient") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.post = AsyncMock(side_effect=RuntimeError("Unexpected failure"))
+
+            result = await _quick_tool_call(
+                provider_url="https://api.openai.com/v1",
+                api_key="sk-test",
+                model="gpt-4o",
+                system_prompt="You are helpful.",
+                user_prompt="Say hello",
+            )
+            assert "Unexpected failure" in result
+
+    async def test_malformed_tool_args(self):
+        """When tool arguments are not valid JSON, should not crash."""
+        with patch("hermes_mobile.core.delegation.httpx.AsyncClient") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.post = AsyncMock(
+                return_value=_make_mock_response(
+                    content="Let me search",
+                    tool_calls=[
+                        {
+                            "function": {
+                                "name": "web_search",
+                                "arguments": "not valid json",
+                            }
+                        }
+                    ],
+                )
+            )
+
+            result = await _quick_tool_call(
+                provider_url="https://api.openai.com/v1",
+                api_key="sk-test",
+                model="gpt-4o",
+                system_prompt="You are helpful.",
+                user_prompt="Search for something",
+            )
+            # Should not crash, should handle gracefully
+            assert isinstance(result, str)
+
 
 class TestDelegateTask:
     @patch("hermes_mobile.core.delegation.get_settings")
@@ -153,6 +227,37 @@ class TestDelegateTask:
         result = await delegate_task("test task")
         assert result["task"] == "test task"
         assert result["result"] == "No API key configured for subagent"
+
+    @patch("hermes_mobile.core.delegation._quick_tool_call")
+    @patch("hermes_mobile.core.delegation.get_settings")
+    async def test_delegate_with_context(self, mock_get_settings, mock_quick):
+        mock_quick.return_value = "Search results here"
+        from hermes_mobile.config.settings import HermesMobileSettings
+
+        settings = HermesMobileSettings()
+        settings.default_provider = "openai"
+        settings.openai_api_key = "sk-test-123"
+        settings.default_model = "gpt-4o"
+        mock_get_settings.return_value = settings
+
+        result = await delegate_task("Find info", context="Topic is AI")
+        assert result["task"] == "Find info"
+        assert result["result"] == "Search results here"
+
+    @patch("hermes_mobile.core.delegation._quick_tool_call")
+    @patch("hermes_mobile.core.delegation.get_settings")
+    async def test_delegate_without_context(self, mock_get_settings, mock_quick):
+        mock_quick.return_value = "Done"
+        from hermes_mobile.config.settings import HermesMobileSettings
+
+        settings = HermesMobileSettings()
+        settings.default_provider = "openrouter"
+        settings.openrouter_api_key = "sk-or-test"
+        settings.default_model = "gpt-4o"
+        mock_get_settings.return_value = settings
+
+        result = await delegate_task("Do the thing")
+        assert result["result"] == "Done"
 
 
 class TestDelegateParallelTasks:
@@ -174,3 +279,19 @@ class TestDelegateParallelTasks:
 
         result = await delegate_parallel_tasks(["Task A", "Task B"])
         assert len(result["results"]) == 2
+
+    @patch("hermes_mobile.core.delegation.delegate_task")
+    async def test_exception_in_subtask(self, mock_delegate):
+        mock_delegate.side_effect = RuntimeError("Subtask crashed")
+
+        result = await delegate_parallel_tasks(["task1"])
+        assert len(result["results"]) == 1
+        assert "Subagent error" in result["results"][0]["result"]
+
+    async def test_max_concurrent_enforced(self):
+        with patch("hermes_mobile.core.delegation.delegate_task") as mock_delegate:
+            mock_delegate.return_value = {"task": "t", "result": "done"}
+            many_tasks = [f"task{i}" for i in range(10)]
+            result = await delegate_parallel_tasks(many_tasks)
+            assert len(result["results"]) == 3  # MAX_CONCURRENT_SUBAGENTS = 3
+            assert result["task_count"] == 3

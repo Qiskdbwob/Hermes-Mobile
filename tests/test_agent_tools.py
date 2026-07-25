@@ -1,5 +1,7 @@
 """Tests for agent intelligence tools."""
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from hermes_mobile.tools.agent_tools import (
@@ -94,38 +96,46 @@ class TestMemoryTool:
         result = await memory_tool(action="search", memory_provider=memory_provider)
         assert "error" in result
 
-    async def test_store_success(self, memory_provider):
+    async def test_store_success(self):
+        mock_provider = MagicMock()
+        mock_provider.store_memory = AsyncMock()
         result = await memory_tool(
-            action="store", key="user_name", value="Alice", memory_provider=memory_provider
+            action="store", key="user_name", value="Alice", memory_provider=mock_provider
         )
         assert result["status"] == "stored"
         assert result["key"] == "user_name"
+        mock_provider.store_memory.assert_awaited_once_with("user_name", "Alice")
 
-    async def test_retrieve_success(self, memory_provider):
-        await memory_provider.store_memory("lang", "Python")
-        result = await memory_tool(action="retrieve", key="lang", memory_provider=memory_provider)
+    async def test_retrieve_success(self):
+        mock_provider = MagicMock()
+        mock_provider.get_memory = AsyncMock(return_value="Python")
+        result = await memory_tool(action="retrieve", key="lang", memory_provider=mock_provider)
         assert result["key"] == "lang"
         assert result["value"] == "Python"
 
-    async def test_retrieve_not_found(self, memory_provider):
+    async def test_retrieve_not_found(self):
+        mock_provider = MagicMock()
+        mock_provider.get_memory = AsyncMock(return_value=None)
         result = await memory_tool(
-            action="retrieve", key="nonexistent", memory_provider=memory_provider
+            action="retrieve", key="nonexistent", memory_provider=mock_provider
         )
         assert result["key"] == "nonexistent"
         assert result["value"] is None
 
-    async def test_list_action(self, memory_provider):
-        await memory_provider.store_memory("a", "1")
-        await memory_provider.store_memory("b", "2")
-        result = await memory_tool(action="list", memory_provider=memory_provider)
+    async def test_list_action(self):
+        mock_provider = MagicMock()
+        mock_provider.list_memory = AsyncMock(return_value=[{"key": "a"}, {"key": "b"}])
+        result = await memory_tool(action="list", memory_provider=mock_provider)
         assert "entries" in result
-        assert len(result["entries"]) >= 2
+        assert len(result["entries"]) == 2
 
-    async def test_delete_success(self, memory_provider):
-        await memory_provider.store_memory("temp", "data")
-        result = await memory_tool(action="delete", key="temp", memory_provider=memory_provider)
+    async def test_delete_success(self):
+        mock_provider = MagicMock()
+        mock_provider.delete_memory = AsyncMock()
+        result = await memory_tool(action="delete", key="temp", memory_provider=mock_provider)
         assert result["status"] == "deleted"
         assert result["key"] == "temp"
+        mock_provider.delete_memory.assert_awaited_once_with("temp")
 
 
 class TestSessionSearchToolEdgeCases:
