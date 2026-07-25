@@ -157,13 +157,37 @@ class TestExpressionVisitor:
 
     def test_invalid_setcomp(self):
         visitor = ExpressionVisitor()
-        tree = ast.parse("{x for x in [1]}", mode="eval")
+        tree = ast.Expression(
+            body=ast.SetComp(
+                generators=[
+                    ast.comprehension(
+                        target=ast.Name(id="x"),
+                        iter=ast.List(elts=[ast.Constant(value=1)], ctx=ast.Load()),
+                        ifs=[],
+                        is_async=0,
+                    )
+                ],
+                elt=ast.Name(id="x"),
+            )
+        )
         visitor.visit(tree)
         assert visitor.valid is False
 
     def test_invalid_generator_exp(self):
         visitor = ExpressionVisitor()
-        tree = ast.parse("(x for x in [1])", mode="eval")
+        tree = ast.Expression(
+            body=ast.GeneratorExp(
+                generators=[
+                    ast.comprehension(
+                        target=ast.Name(id="x"),
+                        iter=ast.List(elts=[ast.Constant(value=1)], ctx=ast.Load()),
+                        ifs=[],
+                        is_async=0,
+                    )
+                ],
+                elt=ast.Name(id="x"),
+            )
+        )
         visitor.visit(tree)
         assert visitor.valid is False
 
@@ -207,7 +231,7 @@ class TestIsSafeExpression:
         assert is_safe_expression("lambda x: x") is False
 
     def test_invalid_syntax(self):
-        assert is_safe_expression("2 ++ 3") is False
+        assert is_safe_expression("2 +") is False
 
 
 class TestSafeCalculateEdgeCases:
