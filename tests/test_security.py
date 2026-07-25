@@ -1,8 +1,15 @@
 """Tests for safe expression evaluation."""
 
+import ast
+
 import pytest
 
-from hermes_mobile.tools.security import safe_calculate
+from hermes_mobile.tools.security import (
+    ExpressionEvaluator,
+    ExpressionVisitor,
+    is_safe_expression,
+    safe_calculate,
+)
 
 
 class TestSafeCalculate:
@@ -108,3 +115,117 @@ class TestSafeCalculate:
         result = safe_calculate("10 / 4")
         assert isinstance(result, float)
         assert result == 2.5
+
+
+class TestExpressionVisitor:
+    def test_valid_expression(self):
+        visitor = ExpressionVisitor()
+        tree = ast.parse("2 + 3", mode="eval")
+        visitor.visit(tree)
+        assert visitor.valid is True
+
+    def test_invalid_name(self):
+        visitor = ExpressionVisitor()
+        tree = ast.parse("foo", mode="eval")
+        visitor.visit(tree)
+        # Bare Name is not caught by ExpressionVisitor (no visit_Name)
+        assert visitor.valid is True
+
+    def test_invalid_attribute(self):
+        visitor = ExpressionVisitor()
+        tree = ast.parse("foo.bar", mode="eval")
+        visitor.visit(tree)
+        assert visitor.valid is False
+
+    def test_invalid_lambda(self):
+        visitor = ExpressionVisitor()
+        tree = ast.parse("lambda x: x", mode="eval")
+        visitor.visit(tree)
+        assert visitor.valid is False
+
+    def test_invalid_listcomp(self):
+        visitor = ExpressionVisitor()
+        tree = ast.parse("[x for x in [1]]", mode="eval")
+        visitor.visit(tree)
+        assert visitor.valid is False
+
+    def test_invalid_dictcomp(self):
+        visitor = ExpressionVisitor()
+        tree = ast.parse("{k: v for k, v in []}", mode="eval")
+        visitor.visit(tree)
+        assert visitor.valid is False
+
+    def test_invalid_setcomp(self):
+        visitor = ExpressionVisitor()
+        tree = ast.parse("{x for x in [1]}", mode="eval")
+        visitor.visit(tree)
+        assert visitor.valid is False
+
+    def test_invalid_generator_exp(self):
+        visitor = ExpressionVisitor()
+        tree = ast.parse("(x for x in [1])", mode="eval")
+        visitor.visit(tree)
+        assert visitor.valid is False
+
+
+class TestExpressionEvaluator:
+    def test_unknown_name_raises(self):
+        evaluator = ExpressionEvaluator()
+        tree = ast.parse("nonexistent_variable", mode="eval")
+        with pytest.raises(ValueError, match="Unknown name"):
+            evaluator.visit(tree)
+
+    def test_unsafe_operator_raises(self):
+        evaluator = ExpressionEvaluator()
+        # ~ is bitwise invert, not in SAFE_OPERATORS
+        tree = ast.parse("~1", mode="eval")
+        with pytest.raises(ValueError, match="Unsafe operator"):
+            evaluator.visit(tree)
+
+    def test_unsafe_function_raises(self):
+        evaluator = ExpressionEvaluator()
+        tree = ast.parse("unsafe_func(42)", mode="eval")
+        with pytest.raises(ValueError, match="Unsafe function"):
+            evaluator.visit(tree)
+
+    def test_empty_stack_returns_none(self):
+        evaluator = ExpressionEvaluator()
+        assert evaluator.result() is None
+
+
+class TestIsSafeExpression:
+    def test_safe_arithmetic(self):
+        assert is_safe_expression("2 + 3") is True
+
+    def test_unsafe_attribute(self):
+        assert is_safe_expression("os.system") is False
+
+    def test_unsafe_subscript(self):
+        assert is_safe_expression("[1][0]") is False
+
+    def test_unsafe_lambda(self):
+        assert is_safe_expression("lambda x: x") is False
+
+    def test_invalid_syntax(self):
+        assert is_safe_expression("2 ++ 3") is False
+
+
+class TestSafeCalculateEdgeCases:
+    def test_unknown_bare_name(self):
+        result = safe_calculate("some_undefined_var")
+        assert isinstance(result, str)
+        assert "error" in result.lower()
+
+    def test_bitwise_not(self):
+        result = safe_calculate("~1")
+        assert isinstance(result, str)
+        assert "unsafe" in result.lower()
+
+    def test_expression_statement(self):
+        # Test that an expression that produces no result returns an error
+        result = safe_calculate("     ")
+        assert isinstance(result, str)
+
+    def test_whitespace_expression(self):
+        result = safe_calculate("  42  ")
+        assert result == 42
