@@ -93,3 +93,60 @@ class TestMemoryTool:
     async def test_search_without_query(self, memory_provider):
         result = await memory_tool(action="search", memory_provider=memory_provider)
         assert "error" in result
+
+    async def test_store_success(self, memory_provider):
+        result = await memory_tool(
+            action="store", key="user_name", value="Alice", memory_provider=memory_provider
+        )
+        assert result["status"] == "stored"
+        assert result["key"] == "user_name"
+
+    async def test_retrieve_success(self, memory_provider):
+        await memory_provider.store_memory("lang", "Python")
+        result = await memory_tool(action="retrieve", key="lang", memory_provider=memory_provider)
+        assert result["key"] == "lang"
+        assert result["value"] == "Python"
+
+    async def test_retrieve_not_found(self, memory_provider):
+        result = await memory_tool(
+            action="retrieve", key="nonexistent", memory_provider=memory_provider
+        )
+        assert result["key"] == "nonexistent"
+        assert result["value"] is None
+
+    async def test_list_action(self, memory_provider):
+        await memory_provider.store_memory("a", "1")
+        await memory_provider.store_memory("b", "2")
+        result = await memory_tool(action="list", memory_provider=memory_provider)
+        assert "entries" in result
+        assert len(result["entries"]) >= 2
+
+    async def test_delete_success(self, memory_provider):
+        await memory_provider.store_memory("temp", "data")
+        result = await memory_tool(action="delete", key="temp", memory_provider=memory_provider)
+        assert result["status"] == "deleted"
+        assert result["key"] == "temp"
+
+
+class TestSessionSearchToolEdgeCases:
+    async def test_search_exception(self, memory_provider):
+        # Make search_sessions raise an exception
+        async def failing_search(*args, **kwargs):
+            raise RuntimeError("DB connection lost")
+
+        memory_provider.search_sessions = failing_search
+        result = await session_search_tool(query="test", memory_provider=memory_provider)
+        assert result["sessions"] == []
+        assert "error" in result
+
+
+class TestMemoryToolEdgeCases:
+    async def test_store_exception(self, memory_provider):
+        async def failing_store(*args, **kwargs):
+            raise RuntimeError("Write failed")
+
+        memory_provider.store_memory = failing_store
+        result = await memory_tool(
+            action="store", key="k", value="v", memory_provider=memory_provider
+        )
+        assert "error" in result

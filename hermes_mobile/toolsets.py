@@ -34,6 +34,7 @@ HERMES_CORE_TOOLS = [
     # Web
     "web_search",
     "web_extract",
+    "x_search",
     # Terminal + process management
     "terminal",
     "process",
@@ -45,6 +46,8 @@ HERMES_CORE_TOOLS = [
     # Vision + image generation
     "vision_analyze",
     "image_generate",
+    "video_analyze",
+    "video_generate",
     # Skills
     "skills_list",
     "skill_view",
