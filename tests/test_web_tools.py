@@ -46,6 +46,38 @@ SAMPLE_DDG_RESULTS = """
 </html>
 """
 
+SAMPLE_HTML_WITH_LINKS = """
+<html>
+<head><title>Link Page</title></head>
+<body>
+    <a href="/valid">Valid Link</a>
+    <a href="#section">Anchor Link</a>
+    <a href="javascript:void(0)">JS Link</a>
+</body>
+</html>
+"""
+SAMPLE_DDG_WITH_REDIRECT = """
+<html>
+<body>
+    <div class="result">
+        <h2 class="result__title"><a class="result__a" href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Freal-site.com%2Fpage">Redirect</a></h2>
+        <span class="result__snippet">Redirect snippet</span>
+    </div>
+</body>
+</html>
+"""
+
+SAMPLE_DDG_NO_LINK = """
+<html>
+<body>
+    <div class="result">
+        <h2>No Link Here</h2>
+        <span class="result__snippet">Snippet without link</span>
+    </div>
+</body>
+</html>
+"""
+
 
 def _make_http_response(status_code=200, text=SAMPLE_HTML, url="https://example.com"):
     """Create a proper httpx mock response."""
@@ -105,6 +137,15 @@ class TestParseDdgResults:
     def test_no_results(self):
         assert _parse_ddg_results("<html><body>No results here</body></html>") == []
 
+    def test_skips_result_without_link(self):
+        results = _parse_ddg_results(SAMPLE_DDG_NO_LINK)
+        assert len(results) == 0
+
+    def test_handles_ddg_redirect(self):
+        results = _parse_ddg_results(SAMPLE_DDG_WITH_REDIRECT)
+        assert len(results) == 1
+        assert "real-site.com" in results[0]["url"]
+
 
 class TestWebSearchTool:
     async def test_empty_query(self):
@@ -145,6 +186,15 @@ class TestWebSearchTool:
             result = await web_search_tool(query="test")
             assert "timed out" in result.get("error", "").lower()
 
+    async def test_generic_exception(self):
+        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.get = AsyncMock(side_effect=ConnectionError("DNS failure"))
+
+            result = await web_search_tool(query="test")
+            assert "error" in result
+
 
 class TestWebExtractTool:
     async def test_no_urls(self):
@@ -172,6 +222,66 @@ class TestWebExtractTool:
             page = result["pages"][0]
             assert page["url"] == "https://example.com"
             assert "Hello World" in page["content"]
+
+    async def test_extract_http_error(self):
+        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.get = AsyncMock(return_value=_make_http_response(status_code=404))
+
+            result = await web_extract_tool(urls=["https://example.com/404"])
+            assert len(result["pages"]) == 1
+            assert "HTTP 404" in result["pages"][0].get("error", "")
+
+    async def test_extract_timeout(self):
+        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value.__aenter__.return_value = mock_client
+            from httpx import TimeoutException
+
+            mock_client.get = AsyncMock(side_effect=TimeoutException("Timed out"))
+
+            result = await web_extract_tool(urls=["https://example.com"])
+            assert "Timeout" in result["pages"][0].get("error", "")
+
+    async def test_extract_generic_exception(self):
+        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.get = AsyncMock(side_effect=RuntimeError("Unexpected failure"))
+
+            result = await web_extract_tool(urls=["https://example.com"])
+            assert "Unexpected failure" in result["pages"][0].get("error", "")
+
+    async def test_extract_non_html_content(self):
+        json_response = _make_http_response(
+            text='{"status": "ok"}',
+        )
+        json_response.headers["content-type"] = "application/json"
+
+        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.get = AsyncMock(return_value=json_response)
+
+            result = await web_extract_tool(urls=["https://api.example.com/data"])
+            assert len(result["pages"]) == 1
+            assert "status" in result["pages"][0]["content"]
+
+    async def test_extract_html_content_type(self):
+        """When content-type includes text/html, _clean_html and _extract_title are used."""
+        html_response = _make_http_response(text=SAMPLE_HTML)
+        html_response.headers["content-type"] = "text/html; charset=utf-8"
+
+        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.get = AsyncMock(return_value=html_response)
+
+            result = await web_extract_tool(urls=["https://example.com"])
+            assert len(result["pages"]) == 1
+            assert "Hello World" in result["pages"][0]["content"]
+            assert result["pages"][0]["title"] == "Test Page"
 
 
 class TestBrowserNavigateTool:
@@ -211,6 +321,45 @@ class TestBrowserNavigateTool:
 
             result = await browser_navigate_tool(url="https://example.com/error")
             assert "error" in result
+
+    async def test_navigate_timeout(self):
+        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value.__aenter__.return_value = mock_client
+            from httpx import TimeoutException
+
+            mock_client.get = AsyncMock(side_effect=TimeoutException("Timed out"))
+
+            result = await browser_navigate_tool(url="https://example.com")
+            assert "timed out" in result.get("error", "").lower()
+
+    async def test_navigate_generic_exception(self):
+        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.get = AsyncMock(side_effect=ConnectionRefusedError("Connection refused"))
+
+            result = await browser_navigate_tool(url="https://example.com")
+            assert "error" in result
+
+    async def test_navigate_filters_links(self):
+        """Anchor-only and javascript: links should be excluded."""
+        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.get = AsyncMock(
+                return_value=_make_http_response(
+                    text=SAMPLE_HTML_WITH_LINKS,
+                    url="https://example.com",
+                )
+            )
+
+            result = await browser_navigate_tool(url="https://example.com")
+            links = result.get("links", [])
+            hrefs = [l["href"] for l in links]
+            assert "/valid" in hrefs
+            assert "#section" not in hrefs
+            assert "javascript:" not in hrefs
 
 
 class TestBrowserSnapshotTool:
