@@ -1,0 +1,286 @@
+"""Tests for the plugins system."""
+
+from pathlib import Path
+
+import pytest
+import yaml
+
+from hermes_mobile.plugins import (
+    AchievementsPlugin,
+    BasePlugin,
+    KanbanPlugin,
+    PluginManifest,
+    PluginRegistry,
+    SecurityGuidancePlugin,
+    get_plugin_registry,
+)
+
+
+class TestPluginManifest:
+    def test_creates_with_required_fields(self):
+        m = PluginManifest(name="test", kind="tool", version="1.0", description="desc")
+        assert m.name == "test"
+        assert m.kind == "tool"
+        assert m.version == "1.0"
+        assert m.description == "desc"
+
+    def test_defaults(self):
+        m = PluginManifest(name="x", kind="y", version="0.1", description="z")
+        assert m.author == ""
+        assert m.homepage == ""
+        assert m.license == "MIT"
+        assert m.dependencies == []
+        assert m.config_schema == {}
+
+
+class DummyPlugin(BasePlugin):
+    """Test plugin for testing BasePlugin."""
+
+    def get_manifest(self):
+        return PluginManifest(name="dummy", kind="tool", version="1.0", description="Dummy plugin")
+
+    async def initialize(self):
+        return True
+
+    async def shutdown(self):
+        pass
+
+
+class TestBasePlugin:
+    def test_abstract_methods(self):
+        with pytest.raises(TypeError):
+            BasePlugin({})
+
+    def test_default_tools_empty(self):
+        plugin = DummyPlugin({"enabled": True})
+        assert plugin.get_tools() == []
+        assert plugin.get_tool_schemas() == []
+
+    def test_enabled_by_default(self):
+        plugin = DummyPlugin({})
+        assert plugin.enabled is True
+
+    def test_disabled_via_config(self):
+        plugin = DummyPlugin({"enabled": False})
+        assert plugin.enabled is False
+
+    def test_get_manifest(self):
+        plugin = DummyPlugin({})
+        m = plugin.get_manifest()
+        assert m.name == "dummy"
+
+
+class TestPluginRegistry:
+    def test_empty_registry(self):
+        registry = PluginRegistry()
+        assert registry.list_plugins() == []
+
+    def test_get_plugin_nonexistent(self):
+        registry = PluginRegistry()
+        assert registry.get_plugin("nope") is None
+        assert registry.get_manifest("nope") is None
+
+    def test_add_plugin_dir(self, temp_dir):
+        registry = PluginRegistry()
+        registry.add_plugin_dir(temp_dir)
+        assert temp_dir in registry._plugin_dirs
+
+    def test_register_and_get_plugin(self):
+        registry = PluginRegistry()
+        plugin = DummyPlugin({})
+        registry._plugins["dummy"] = plugin
+        registry._manifests["dummy"] = plugin.get_manifest()
+
+        assert registry.get_plugin("dummy") is plugin
+        assert registry.get_manifest("dummy").name == "dummy"
+
+    def test_list_plugins(self):
+        registry = PluginRegistry()
+        plugin = DummyPlugin({})
+        registry._plugins["dummy"] = plugin
+        registry._manifests["dummy"] = plugin.get_manifest()
+
+        plugins = registry.list_plugins()
+        assert len(plugins) == 1
+        assert plugins[0].name == "dummy"
+
+    def test_get_all_tools(self):
+        registry = PluginRegistry()
+        plugin = AchievementsPlugin({})
+        registry._plugins["achievements"] = plugin
+
+        tools = registry.get_all_tools()
+        assert len(tools) == 3
+        assert "achievements_list" in tools
+
+    def test_get_all_tool_schemas(self):
+        registry = PluginRegistry()
+        plugin = AchievementsPlugin({})
+        registry._plugins["achievements"] = plugin
+
+        schemas = registry.get_all_tool_schemas()
+        assert len(schemas) == 3
+        assert schemas[0]["function"]["name"] == "achievements_list"
+
+    async def test_initialize_all(self):
+        registry = PluginRegistry()
+        plugin = DummyPlugin({})
+        registry._plugins["dummy"] = plugin
+        await registry.initialize_all()
+        assert True  # No crash
+
+    async def test_shutdown_all(self):
+        registry = PluginRegistry()
+        plugin = DummyPlugin({})
+        registry._plugins["dummy"] = plugin
+        await registry.shutdown_all()
+        assert True  # No crash
+
+    def test_discover_plugins_from_directory(self, temp_dir):
+        plugin_dir = temp_dir / "plugins"
+        plugin_dir.mkdir()
+
+        pkg_dir = plugin_dir / "my_plugin"
+        pkg_dir.mkdir()
+
+        manifest = {
+            "name": "my_plugin",
+            "kind": "tool",
+            "version": "1.0.0",
+            "description": "My test plugin",
+        }
+        (pkg_dir / "plugin.yaml").write_text(yaml.dump(manifest))
+
+        init_code = """
+from hermes_mobile.plugins import BasePlugin, PluginManifest
+class MyPlugin(BasePlugin):
+    def get_manifest(self):
+        return PluginManifest(name="my_plugin", kind="tool", version="1.0", description="x")
+    async def initialize(self): return True
+    async def shutdown(self): pass
+"""
+        (pkg_dir / "__init__.py").write_text(init_code)
+
+        registry = PluginRegistry()
+        registry.config = {"my_plugin": {}}
+        registry.add_plugin_dir(plugin_dir)
+
+        loaded = registry.discover_plugins()
+        assert len(loaded) > 0
+        assert "my_plugin" in loaded
+
+    def test_discover_skips_missing_manifest(self, temp_dir):
+        plugin_dir = temp_dir / "plugins"
+        plugin_dir.mkdir()
+        (plugin_dir / "no_manifest").mkdir()
+
+        registry = PluginRegistry()
+        registry.add_plugin_dir(plugin_dir)
+        loaded = registry.discover_plugins()
+        assert loaded == []
+
+    def test_discover_handles_nonexistent_dir(self):
+        registry = PluginRegistry()
+        registry.add_plugin_dir(Path("/nonexistent"))
+        loaded = registry.discover_plugins()
+        assert loaded == []
+
+
+class TestAchievementsPlugin:
+    def test_get_manifest(self):
+        plugin = AchievementsPlugin({})
+        m = plugin.get_manifest()
+        assert m.name == "achievements"
+        assert m.kind == "dashboard"
+
+    async def test_initialize(self):
+        plugin = AchievementsPlugin({})
+        assert await plugin.initialize() is True
+
+    async def test_shutdown(self):
+        plugin = AchievementsPlugin({})
+        await plugin.shutdown()
+        assert True
+
+    def test_get_tools(self):
+        plugin = AchievementsPlugin({})
+        tools = plugin.get_tools()
+        assert "achievements_list" in tools
+        assert "achievements_unlock" in tools
+        assert len(tools) == 3
+
+    def test_get_tool_schemas(self):
+        plugin = AchievementsPlugin({})
+        schemas = plugin.get_tool_schemas()
+        assert len(schemas) == 3
+        names = [s["function"]["name"] for s in schemas]
+        assert "achievements_list" in names
+        assert "achievements_unlock" in names
+
+
+class TestKanbanPlugin:
+    def test_get_manifest(self):
+        plugin = KanbanPlugin({})
+        m = plugin.get_manifest()
+        assert m.name == "kanban"
+        assert m.kind == "dashboard"
+
+    async def test_initialize(self):
+        plugin = KanbanPlugin({})
+        assert await plugin.initialize() is True
+
+    def test_get_tools(self):
+        plugin = KanbanPlugin({})
+        tools = plugin.get_tools()
+        assert "kanban_show" in tools
+        assert "kanban_create" in tools
+        assert len(tools) == 12
+
+    def test_get_tool_schemas(self):
+        plugin = KanbanPlugin({})
+        schemas = plugin.get_tool_schemas()
+        assert schemas == []  # Defined in toolsets.py, not here
+
+
+class TestSecurityGuidancePlugin:
+    def test_get_manifest(self):
+        plugin = SecurityGuidancePlugin({})
+        m = plugin.get_manifest()
+        assert m.name == "security-guidance"
+        assert m.kind == "tool"
+
+    async def test_initialize(self):
+        plugin = SecurityGuidancePlugin({})
+        assert await plugin.initialize() is True
+
+    def test_get_tools(self):
+        plugin = SecurityGuidancePlugin({})
+        tools = plugin.get_tools()
+        assert len(tools) == 3
+        assert "security_scan" in tools
+
+    def test_get_tool_schemas(self):
+        plugin = SecurityGuidancePlugin({})
+        schemas = plugin.get_tool_schemas()
+        assert len(schemas) >= 2
+        names = [s["function"]["name"] for s in schemas]
+        assert "security_scan" in names
+        assert "security_advice" in names
+
+
+class TestGetPluginRegistry:
+    def test_returns_singleton(self):
+        registry = get_plugin_registry()
+        assert registry is get_plugin_registry()
+
+    def test_has_builtin_plugins(self):
+        registry = get_plugin_registry()
+        assert registry.get_plugin("achievements") is not None
+        assert registry.get_plugin("kanban") is not None
+        assert registry.get_plugin("security-guidance") is not None
+
+    def test_builtin_manifests(self):
+        registry = get_plugin_registry()
+        assert registry.get_manifest("achievements").name == "achievements"
+        assert registry.get_manifest("kanban").name == "kanban"
+        assert registry.get_manifest("security-guidance").name == "security-guidance"
