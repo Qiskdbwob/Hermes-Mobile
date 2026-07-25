@@ -1,5 +1,6 @@
 """Mobile Skills Manager - Handles skill discovery, installation, and execution"""
 
+import asyncio
 import logging
 import shutil
 import subprocess

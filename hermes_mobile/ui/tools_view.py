@@ -8,6 +8,7 @@ from hermes_mobile.toolsets import (
     get_toolset,
     list_toolsets_by_category,
 )
+from hermes_mobile.locales import t
 
 
 class ToolsView:

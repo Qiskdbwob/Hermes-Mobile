@@ -3,7 +3,7 @@
 import flet as ft
 
 from hermes_mobile.config.settings import get_settings
-from hermes_mobile.locales import get_locale, set_locale, available_locales
+from hermes_mobile.locales import get_locale, set_locale, available_locales, t
 
 
 class SettingsView:
@@ -19,7 +19,7 @@ class SettingsView:
         return ft.ListView(
             controls=[
                 self._build_section(
-                    "AI Provider",
+                    t("settings.ai_provider"),
                     [
                         self._build_provider_dropdown(),
                         self._build_model_dropdown(),
@@ -30,7 +30,7 @@ class SettingsView:
                     ],
                 ),
                 self._build_section(
-                    "Agent Settings",
+                    t("settings.agent_settings"),
                     [
                         ft.Slider(
                             label="Temperature: {value}",
@@ -82,7 +82,7 @@ class SettingsView:
                     ],
                 ),
                 self._build_section(
-                    "Appearance",
+                    t("settings.appearance"),
                     [
                         ft.Dropdown(
                             label="Language",
@@ -114,7 +114,7 @@ class SettingsView:
                     ],
                 ),
                 self._build_section(
-                    "Advanced",
+                    t("settings.advanced"),
                     [
                         ft.TextField(
                             label="Request Timeout (s)",

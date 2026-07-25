@@ -2,6 +2,8 @@
 
 import flet as ft
 
+from hermes_mobile.locales import t
+
 
 class MemoryView:
     """Memory management interface"""

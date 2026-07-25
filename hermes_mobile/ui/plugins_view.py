@@ -6,6 +6,7 @@ import flet as ft
 
 from hermes_mobile.config.settings import get_settings
 from hermes_mobile.plugins import get_plugin_registry
+from hermes_mobile.locales import t
 
 
 class PluginsView:

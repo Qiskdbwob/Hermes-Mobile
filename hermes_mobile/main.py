@@ -5,6 +5,7 @@ import logging
 
 import flet as ft
 
+from hermes_mobile.locales import t
 from hermes_mobile.config.settings import get_settings, reload_settings
 from hermes_mobile.core.agent import Message, MobileAgent, ToolCall, create_mobile_agent
 from hermes_mobile.cron.scheduler import (
@@ -23,7 +24,6 @@ from hermes_mobile.ui.gateway_view import GatewayView
 from hermes_mobile.ui.memory_view import MemoryView
 from hermes_mobile.ui.plugins_view import PluginsView
 from hermes_mobile.ui.settings_view import SettingsView
-from hermes_mobile.ui.skills_view import SkillsView
 from hermes_mobile.ui.skills_view import SkillsView
 from hermes_mobile.ui.tools_view import ToolsView
 
@@ -76,7 +76,8 @@ class HermesMobileApp:
         self.page.theme_mode = ft.ThemeMode.SYSTEM
         self.page.padding = 0
         self.page.spacing = 0
-        self.is_mobile = getattr(self.page, "platform", "").lower() in ("android", "ios")
+        platform_str = str(getattr(self.page, "platform", ""))
+        self.is_mobile = platform_str.lower() in ("android", "ios")
 
         if not self.is_mobile:
             self.page.window_width = 480

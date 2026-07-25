@@ -24,6 +24,7 @@ dependencies = [
     "keyring>=25.0.0",
     "platformdirs>=4.2.0",
     "apscheduler>=3.10.0",
+    "croniter>=6.0.0",
     "plyer>=2.1.0",
 ]
 

@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 from hermes_mobile.config.settings import get_settings
+from hermes_mobile.providers import get_provider_profile
 from hermes_mobile.tools.web_tools import web_search_tool
 
 logger = logging.getLogger(__name__)
@@ -32,7 +34,6 @@ async def _quick_tool_call(
     available_tools: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """Make a single-turn LLM call for a subagent task."""
-    settings = get_settings()
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -90,7 +91,8 @@ async def _quick_tool_call(
                     if name == "web_search":
                         result = await web_search_tool(args.get("query", user_prompt))
                         tool_results.append(
-                            f"web_search({args.get('query', '')}): {len(result.get('results', []))} results"
+                            f"web_search({args.get('query', '')}): "
+                            f"{len(result.get('results', []))} results"
                         )
 
                 if tool_results:
@@ -117,11 +119,30 @@ async def delegate_task(
     Returns dict with 'result' string and 'task' description.
     """
     settings = get_settings()
+    provider = settings.default_provider
 
-    provider_url = settings.providers.get(settings.default_provider, {}).get(
-        "base_url", "https://openrouter.ai/api/v1"
-    )
-    api_key = settings.get_api_key(settings.default_provider)
+    # Resolve provider URL and API key via provider profiles
+    profile = get_provider_profile(provider)
+    provider_url = profile.base_url if profile else "https://openrouter.ai/api/v1"
+
+    # Try each env var the provider declares, then fall back to direct settings attrs
+    api_key = None
+    if profile:
+        for var in profile.env_vars:
+            val = getattr(settings, var.lower(), None) or os.environ.get(var)
+            if val:
+                api_key = val
+                break
+
+    if not api_key:
+        key_map = {
+            "openai": settings.openai_api_key,
+            "openrouter": settings.openrouter_api_key,
+            "anthropic": settings.anthropic_api_key,
+            "gemini": settings.gemini_api_key,
+        }
+        api_key = key_map.get(provider)
+
     model = settings.default_model
 
     if not api_key:

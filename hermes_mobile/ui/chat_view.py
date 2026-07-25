@@ -110,17 +110,17 @@ class ChatView:
                     [
                         ft.Icon(ft.Icons.AUTO_AWESOME, size=64, color=ft.Colors.PRIMARY),
                         ft.Container(height=16),
-                        ft.Text("Welcome to Hermes Mobile!", size=24, weight=ft.FontWeight.BOLD),
+                        ft.Text(t("app.title"), size=24, weight=ft.FontWeight.BOLD),
                         ft.Container(height=8),
                         ft.Text(
-                            "To get started, add an API key in Settings.",
+                            t("chat.no_api_key"),
                             size=14,
                             color=ft.Colors.OUTLINE,
                             text_align=ft.TextAlign.CENTER,
                         ),
                         ft.Container(height=4),
                         ft.Text(
-                            "Go to Settings > API Key to configure.",
+                            t("chat.no_api_key_hint"),
                             size=14,
                             color=ft.Colors.OUTLINE,
                             text_align=ft.TextAlign.CENTER,
@@ -139,10 +139,10 @@ class ChatView:
                     [
                         ft.Icon(ft.Icons.AUTO_AWESOME, size=64, color=ft.Colors.PRIMARY),
                         ft.Container(height=16),
-                        ft.Text("Hermes Mobile", size=24, weight=ft.FontWeight.BOLD),
+                        ft.Text(t("app.title"), size=24, weight=ft.FontWeight.BOLD),
                         ft.Container(height=8),
                         ft.Text(
-                            "Ready to help. Send a message to start.",
+                            t("chat.ready_help"),
                             size=14,
                             color=ft.Colors.OUTLINE,
                             text_align=ft.TextAlign.CENTER,

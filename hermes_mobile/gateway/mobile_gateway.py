@@ -76,9 +76,6 @@ def _sync_allowlist_add(platform: str, user_id: str) -> None:
         return  # Already covered
     ids.append(str(user_id))
     try:
-        from hermes_mobile.config.settings import get_settings
-
-        settings = get_settings()
         # Save to .env file
         env_path = Path(".env")
         if env_path.exists():
@@ -107,18 +104,6 @@ def _sync_allowlist_remove(platform: str, user_id: str) -> None:
     if str(user_id) not in ids:
         return
     ids.remove(str(user_id))
-    try:
-        env_path = Path(".env")
-        if env_path.exists():
-            content = env_path.read_text()
-            lines = content.split("\n")
-            for i, line in enumerate(lines):
-                if line.startswith(f"{env_var}="):
-                    lines[i] = f"{env_var}={','.join(ids)}" if ids else ""
-                    break
-            env_path.write_text("\n".join(lines))
-    except Exception:
-        pass
 
 
 @dataclass

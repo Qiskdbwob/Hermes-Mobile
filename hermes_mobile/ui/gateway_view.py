@@ -7,6 +7,7 @@ from hermes_mobile.gateway.mobile_gateway import (
     cli_revoke,
     get_pairing_manager,
 )
+from hermes_mobile.locales import t
 
 
 class GatewayView:

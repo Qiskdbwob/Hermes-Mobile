@@ -22,7 +22,12 @@ from hermes_mobile.tools.agent_tools import (
 )
 from hermes_mobile.tools.path_security import validate_and_resolve_path
 from hermes_mobile.tools.security import safe_calculate
-from hermes_mobile.tools.web_tools import web_extract_tool, web_search_tool
+from hermes_mobile.tools.web_tools import (
+    browser_navigate_tool,
+    browser_snapshot_tool,
+    web_extract_tool,
+    web_search_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -671,7 +676,7 @@ class MobileAgent:
                     "type": "function",
                     "function": {
                         "name": "browser_navigate",
-                        "description": "Navigate to a URL and return page title, content, and links",
+                        "description": "Navigate to a URL and return page content",
                         "parameters": {
                             "type": "object",
                             "properties": {
@@ -699,7 +704,8 @@ class MobileAgent:
                     "type": "function",
                     "function": {
                         "name": "delegate_tasks",
-                        "description": "Run multiple independent tasks in parallel using subagents (max 3)",
+                        "description": "Run multiple independent tasks in parallel "
+                        "using subagents (max 3)",
                         "parameters": {
                             "type": "object",
                             "properties": {

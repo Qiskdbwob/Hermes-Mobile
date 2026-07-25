@@ -11,6 +11,7 @@ from hermes_mobile.cron.scheduler import (
     list_jobs,
     run_job_now,
 )
+from hermes_mobile.locales import t
 
 
 class CronView:
