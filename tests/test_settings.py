@@ -92,3 +92,15 @@ class TestHermesMobileSettings:
         monkeypatch.setenv("DATA_DIR", str(temp_dir / "from_env"))
         s = HermesMobileSettings()
         assert s.data_dir == str(temp_dir / "from_env")
+
+    def test_data_dir_fallback_when_home_fails(self, monkeypatch):
+        """When Path.home() raises, should fall back to cwd."""
+        import pathlib
+
+        original_home = pathlib.Path.home
+        monkeypatch.setattr(
+            pathlib.Path, "home", lambda: (_ for _ in ()).throw(PermissionError("mock"))
+        )
+        s = HermesMobileSettings()
+        assert ".hermes_mobile" in s.data_dir
+        monkeypatch.setattr(pathlib.Path, "home", original_home)
