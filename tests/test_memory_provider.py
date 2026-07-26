@@ -170,3 +170,64 @@ class TestMobileMemoryProvider:
         assert len(results) >= 1
         assert results[0]["content"] == "Secret data"
         mp.close()
+
+    async def test_save_conversation_with_encryption(self, temp_dir):
+        db_path = temp_dir / "conv_enc.db"
+        mp = MobileMemoryProvider(db_path=db_path, encrypt=True, encryption_key="test-key")
+        messages = [Message.user("Hello"), Message.assistant("Hi!")]
+        await mp.save_conversation("enc-conv", messages)
+        convos = await mp.get_conversation("enc-conv")
+        assert len(convos) == 2
+        assert convos[0]["content"] == "Hello"
+        assert convos[1]["content"] == "Hi!"
+        mp.close()
+
+    async def test_save_conversation_dedup(self, memory_provider):
+        msg = Message.user("Duplicate")
+        session_id = "dedup-session"
+        await memory_provider.save_conversation(session_id, [msg])
+        await memory_provider.save_conversation(session_id, [msg])
+        convos = await memory_provider.get_conversation(session_id)
+        assert len(convos) == 1
+
+    async def test_get_relevant_context_no_match(self, memory_provider):
+        await memory_provider.add_memory_entry(
+            session_id="ctx-test", content="User prefers dark mode"
+        )
+        context = await memory_provider.get_relevant_context("nonexistent_zzz")
+        assert context == ""
+
+    async def test_get_conn_reconnects_after_close(self, memory_provider):
+        memory_provider._conn = None
+        conn = memory_provider._get_conn()
+        assert conn is not None
+
+    async def test_set_skill_memory_with_encryption(self, temp_dir):
+        db_path = temp_dir / "skill_enc.db"
+        mp = MobileMemoryProvider(db_path=db_path, encrypt=True, encryption_key="test-key")
+        await mp.set_skill_memory(skill_name="enc_skill", key="secret", value="hidden")
+        result = await mp.get_skill_memory("enc_skill", "secret")
+        assert result == "hidden"
+        mp.close()
+
+    async def test_skill_memory_non_json_value(self, temp_dir):
+        mp = MobileMemoryProvider(db_path=temp_dir / "skill_raw2.db", encrypt=False)
+        mp._get_conn().execute(
+            "INSERT INTO skill_memory (id, skill_name, key, value, created_at) VALUES (?, ?, ?, ?, ?)",
+            ("raw:key", "raw_skill", "key", "not-json-string", "2024-01-01T00:00:00"),
+        )
+        mp._get_conn().commit()
+        result = await mp.get_skill_memory("raw_skill", "key")
+        assert result == "not-json-string"
+
+    def test_encrypt_no_fernet_returns_data(self, temp_dir):
+        mp = MobileMemoryProvider(db_path=temp_dir / "no_fernet.db", encrypt=False)
+        assert mp._encrypt("hello") == "hello"
+        assert mp._decrypt("world") == "world"
+
+    def test_decrypt_failure_returns_data(self, temp_dir):
+        mp = MobileMemoryProvider(
+            db_path=temp_dir / "dec_fail.db", encrypt=True, encryption_key="test"
+        )
+        result = mp._decrypt("not-encrypted-data")
+        assert result == "not-encrypted-data"

@@ -185,6 +185,73 @@ class MyPlugin(BasePlugin):
         loaded = registry.discover_plugins()
         assert loaded == []
 
+    def test_discover_skips_files_in_dir(self, temp_dir):
+        plugin_dir = temp_dir / "plugins"
+        plugin_dir.mkdir()
+        (plugin_dir / "regular_file.txt").write_text("not a plugin")
+        (plugin_dir / "no_init_dir").mkdir()
+        manifest = {
+            "name": "no_init",
+            "kind": "tool",
+            "version": "1.0",
+            "description": "No init file",
+        }
+        (plugin_dir / "no_init_dir" / "plugin.yaml").write_text(yaml.dump(manifest))
+        registry = PluginRegistry()
+        registry.config = {}
+        registry.add_plugin_dir(plugin_dir)
+        loaded = registry.discover_plugins()
+        assert "no_init" not in loaded  # Has plugin.yaml but no __init__.py
+
+    def test_discover_handles_load_error(self, temp_dir):
+        plugin_dir = temp_dir / "plugins"
+        plugin_dir.mkdir()
+        pkg_dir = plugin_dir / "broken"
+        pkg_dir.mkdir()
+        (pkg_dir / "plugin.yaml").write_text("invalid: yaml: : broken: :")
+        (pkg_dir / "__init__.py").write_text("print('hello')")
+        registry = PluginRegistry()
+        registry.config = {}
+        registry.add_plugin_dir(plugin_dir)
+        loaded = registry.discover_plugins()
+        assert "broken" not in loaded
+
+
+class TestBuiltinPluginsErrorHandling:
+    async def test_initialize_all_error(self):
+        class FailingPlugin(BasePlugin):
+            def get_manifest(self):
+                return PluginManifest(name="fail", kind="tool", version="1", description="Fail")
+
+            async def initialize(self):
+                raise RuntimeError("Init failed")
+
+            async def shutdown(self):
+                pass
+
+        registry = PluginRegistry()
+        registry._plugins["fail"] = FailingPlugin({})
+        registry._manifests["fail"] = FailingPlugin({}).get_manifest()
+        await registry.initialize_all()
+        assert True  # No crash
+
+    async def test_shutdown_all_error(self):
+        class FailingPlugin(BasePlugin):
+            def get_manifest(self):
+                return PluginManifest(name="fail", kind="tool", version="1", description="Fail")
+
+            async def initialize(self):
+                return True
+
+            async def shutdown(self):
+                raise RuntimeError("Shutdown failed")
+
+        registry = PluginRegistry()
+        registry._plugins["fail"] = FailingPlugin({})
+        registry._manifests["fail"] = FailingPlugin({}).get_manifest()
+        await registry.shutdown_all()
+        assert True  # No crash
+
 
 class TestAchievementsPlugin:
     def test_get_manifest(self):
@@ -241,6 +308,10 @@ class TestKanbanPlugin:
         schemas = plugin.get_tool_schemas()
         assert schemas == []  # Defined in toolsets.py, not here
 
+    async def test_shutdown(self):
+        plugin = KanbanPlugin({})
+        await plugin.shutdown()
+
 
 class TestSecurityGuidancePlugin:
     def test_get_manifest(self):
@@ -266,6 +337,10 @@ class TestSecurityGuidancePlugin:
         names = [s["function"]["name"] for s in schemas]
         assert "security_scan" in names
         assert "security_advice" in names
+
+    async def test_shutdown(self):
+        plugin = SecurityGuidancePlugin({})
+        await plugin.shutdown()
 
 
 class TestGetPluginRegistry:

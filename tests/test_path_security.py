@@ -1,11 +1,13 @@
 """Tests for path security module."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from hermes_mobile.tools.path_security import (
     get_allowed_directories,
+    get_safe_home_dir,
     has_traversal_component,
     validate_and_resolve_path,
     validate_within_dir,
@@ -82,6 +84,14 @@ class TestValidateAndResolvePath:
         exists = path.exists()
         assert exists is False  # Just confirming
 
+    def test_resolve_os_error(self, temp_dir):
+        bad_path = temp_dir / "nonexistent"
+        with patch.object(Path, "resolve", side_effect=OSError("Permission denied")):
+            resolved, err = validate_and_resolve_path(str(bad_path))
+            assert resolved is None
+            assert err is not None
+            assert "Cannot resolve" in err
+
 
 class TestGetAllowedDirectories:
     def test_returns_list_of_paths(self):
@@ -91,3 +101,24 @@ class TestGetAllowedDirectories:
         for d in allowed:
             assert isinstance(d, Path)
             assert d.exists()
+
+
+class TestGetSafeHomeDir:
+    @patch("pathlib.Path.home", side_effect=Exception("No home dir"))
+    def test_fallback_to_cwd(self, mock_home):
+        result = get_safe_home_dir()
+        assert result == Path.cwd()
+
+    def test_normal_home(self):
+        result = get_safe_home_dir()
+        assert result == Path.home()
+
+
+class TestValidateAndResolvePathResolutionError:
+    def test_resolve_os_error(self, temp_dir):
+        bad_path = temp_dir / "nonexistent"
+        with patch.object(Path, "resolve", side_effect=OSError("Permission denied")):
+            resolved, err = validate_and_resolve_path(str(bad_path))
+            assert resolved is None
+            assert err is not None
+            assert "Cannot resolve" in err

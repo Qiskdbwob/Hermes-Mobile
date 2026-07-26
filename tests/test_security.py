@@ -233,6 +233,16 @@ class TestIsSafeExpression:
     def test_invalid_syntax(self):
         assert is_safe_expression("2 +") is False
 
+    def test_import_unsafe(self):
+        visitor = ExpressionVisitor()
+        visitor.visit(ast.Import(names=[ast.alias(name="os")]))
+        assert visitor.valid is False
+
+    def test_import_from_unsafe(self):
+        visitor = ExpressionVisitor()
+        visitor.visit(ast.ImportFrom(module="os", names=[ast.alias(name="system")], level=0))
+        assert visitor.valid is False
+
 
 class TestSafeCalculateEdgeCases:
     def test_unknown_bare_name(self):
@@ -253,3 +263,56 @@ class TestSafeCalculateEdgeCases:
     def test_whitespace_expression(self):
         result = safe_calculate("  42  ")
         assert result == 42
+
+    def test_unsafe_binary_operator(self):
+        result = safe_calculate("1 << 2")
+        assert isinstance(result, str)
+
+    def test_expr_node_evaluator(self):
+        evaluator = ExpressionEvaluator()
+        module = ast.parse("42", mode="exec")
+        evaluator.visit(module.body[0])
+        assert evaluator.result() == 42
+
+    def test_unknown_bool_op(self):
+        evaluator = ExpressionEvaluator()
+        tree = ast.Expression(body=ast.BoolOp(op=ast.Or(), values=[ast.Constant(value=True)]))
+        evaluator.visit(tree)
+        assert evaluator.result() is True
+
+    def test_unsafe_comparison_is(self):
+        result = safe_calculate("1 is 1")
+        assert isinstance(result, str)
+
+    def test_empty_result_after_eval(self):
+        evaluator = ExpressionEvaluator()
+        tree = ast.parse("42", mode="eval")
+        evaluator.visit(tree)
+        evaluator._stack.clear()
+        assert evaluator.result() is None
+
+    def test_none_constant_is_empty(self):
+        result = safe_calculate("None")
+        assert isinstance(result, str)
+        assert "empty" in result.lower() or "error" in result.lower()
+
+    def test_unknown_bool_op_ast(self):
+        node = ast.BoolOp(
+            op=ast.Or(),
+            values=[ast.Constant(value=True), ast.Constant(value=False)],
+        )
+        evaluator = ExpressionEvaluator()
+        evaluator.visit(node)
+        assert evaluator.result() is True
+
+    def test_unknown_bool_op_raises(self):
+        class CustomBoolOp(ast.boolop):
+            pass
+
+        node = ast.BoolOp(
+            op=CustomBoolOp(),
+            values=[ast.Constant(value=True), ast.Constant(value=False)],
+        )
+        evaluator = ExpressionEvaluator()
+        with pytest.raises(ValueError, match="Unknown bool op"):
+            evaluator.visit(node)

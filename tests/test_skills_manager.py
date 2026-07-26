@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -178,6 +179,37 @@ class MySkill:
             with pytest.raises(ValueError, match="Could not load"):
                 await skill.execute()
 
+    async def test_execute_package_skill(self, temp_dir: Path):
+        pkg_dir = _create_skill_package(
+            temp_dir,
+            "pkg_skill",
+            "async def execute(input: str) -> str:\n    return f'Pkg: {input}'",
+        )
+        skill = MobileSkill(
+            name="pkg_skill",
+            description="Package skill",
+            schema={"type": "object"},
+            path=pkg_dir,
+        )
+        result = await skill.execute(input="test")
+        assert result == "Pkg: test"
+
+    async def test_execute_sync_class_based_skill(self, temp_dir: Path):
+        code = """
+class MySkill:
+    def execute(self, msg: str) -> str:
+        return f"Sync: {msg}"
+"""
+        skill_path = _create_skill_file(temp_dir, "sync_class", code)
+        skill = MobileSkill(
+            name="sync_class",
+            description="Sync class skill",
+            schema={"type": "object"},
+            path=skill_path,
+        )
+        result = await skill.execute(msg="hello")
+        assert result == "Sync: hello"
+
 
 class TestMobileSkillManager:
     def test_creates_skills_dir(self, temp_dir: Path):
@@ -307,3 +339,145 @@ class TestMobileSkillManager:
     def test_export_nonexistent_skill(self, temp_dir: Path):
         manager = MobileSkillManager(temp_dir)
         assert manager.export_skill("ghost", temp_dir) is False
+
+    def test_export_file_skill(self, temp_dir: Path):
+        skills_dir = temp_dir / "skills"
+        skills_dir.mkdir()
+        skill_path = _create_skill_file(skills_dir, "file_skill", "async def execute(): return 1")
+        manager = MobileSkillManager(skills_dir)
+        export_path = temp_dir / "exported"
+        assert manager.export_skill("file_skill", export_path) is True
+
+    def test_get_skill_info_package(self, temp_dir: Path):
+        pkg_dir = _create_skill_package(temp_dir, "info_pkg")
+        (pkg_dir / "README.md").write_text("# Info Pkg\nDocs here")
+        manager = MobileSkillManager(temp_dir)
+        info = manager.get_skill_info("info_pkg")
+        assert info is not None
+        assert info["name"] == "info_pkg"
+        assert "readme" in info
+        assert "source" in info
+
+    def test_load_skill_package_error(self, temp_dir: Path):
+        bad_dir = temp_dir / "bad_pkg"
+        bad_dir.mkdir()
+        (bad_dir / "skill.yaml").write_text("invalid: yaml: : broken")
+        manager = MobileSkillManager(temp_dir)
+        assert manager.get_skill("bad_pkg") is None
+
+    def test_load_skill_file_with_schema(self, temp_dir: Path):
+        code = '''"""
+My docstring
+schema: {type: object, properties: {q: {type: string}}}
+"""
+async def execute(q: str) -> str:
+    return q
+'''
+        _create_skill_file(temp_dir, "schema_skill", code)
+        manager = MobileSkillManager(temp_dir)
+        skill = manager.get_skill("schema_skill")
+        assert skill is not None
+        assert "schema" in skill.description or skill.schema != {}
+
+    def test_load_skill_file_error(self, temp_dir: Path, monkeypatch):
+        manager = MobileSkillManager(temp_dir)
+        bad_file = temp_dir / "broken.py"
+        bad_file.write_text("# some content")
+
+        def broken_read_text(*args, **kwargs):
+            raise OSError("Permission denied")
+
+        monkeypatch.setattr(Path, "read_text", broken_read_text)
+        manager._load_skill_file(bad_file)
+        assert manager.get_skill("broken") is None
+
+    def test_remove_directory_skill(self, temp_dir: Path):
+        pkg_dir = _create_skill_package(temp_dir, "del_pkg")
+        assert pkg_dir.exists()
+        manager = MobileSkillManager(temp_dir)
+        assert manager.remove_skill("del_pkg") is True
+        assert manager.get_skill("del_pkg") is None
+        assert not pkg_dir.exists()
+
+    def test_remove_file_skill_removes_file(self, temp_dir: Path):
+        skill_path = _create_skill_file(temp_dir, "del_file", "async def execute(): return 1")
+        assert skill_path.exists()
+        manager = MobileSkillManager(temp_dir)
+        assert manager.remove_skill("del_file") is True
+        assert not skill_path.exists()
+
+    def test_create_skill_template(self, temp_dir: Path):
+        manager = MobileSkillManager(temp_dir)
+        result = manager.create_skill_template("my_new_skill", "A custom skill")
+        assert result.exists()
+        assert (result / "skill.yaml").exists()
+        assert (result / "main.py").exists()
+        assert (result / "README.md").exists()
+        skill = manager.get_skill("my_new_skill")
+        assert skill is not None
+        assert skill.description == "A custom skill"
+
+    async def test_install_skill_from_path_dir(self, temp_dir: Path):
+        src_dir = temp_dir / "imported_pkg"
+        src_dir.mkdir()
+        manifest = {
+            "name": "imported_pkg",
+            "description": "Imported package",
+            "schema": {"type": "object", "properties": {}},
+        }
+        (src_dir / "skill.yaml").write_text(yaml.dump(manifest))
+        (src_dir / "main.py").write_text("async def execute(): return 'imported'")
+
+        manager = MobileSkillManager(temp_dir / "skills_dest")
+        result = await manager.install_skill_from_path(src_dir)
+        assert result is not None
+        assert result.name == "imported_pkg"
+
+    async def test_install_skill_from_path_file(self, temp_dir: Path):
+        src_file = _create_skill_file(
+            temp_dir, "standalone", "async def execute(): return 'standalone'"
+        )
+        manager = MobileSkillManager(temp_dir / "skills_dest")
+        result = await manager.install_skill_from_path(src_file)
+        assert result is not None
+        assert result.name == "standalone"
+
+    async def test_install_skill_from_path_overwrite(self, temp_dir: Path):
+        pkg_dir = _create_skill_package(temp_dir, "overwrite_me")
+        manager = MobileSkillManager(temp_dir / "skills_dest")
+        result1 = await manager.install_skill_from_path(pkg_dir)
+        assert result1 is not None
+        result2 = await manager.install_skill_from_path(pkg_dir)
+        assert result2 is not None
+        assert result2.name == "overwrite_me"
+
+    async def test_install_skill_from_path_error(self, temp_dir: Path):
+        manager = MobileSkillManager(temp_dir)
+        fake = Path("/nonexistent/path")
+        result = await manager.install_skill_from_path(fake)
+        assert result is None
+
+    async def test_install_skill_from_url_generic_fail(self, temp_dir: Path):
+        manager = MobileSkillManager(temp_dir)
+        result = await manager.install_skill_from_url("https://invalid.url/skill.py")
+        assert result is None
+
+    def test_export_package_skill(self, temp_dir: Path):
+        pkg_dir = _create_skill_package(temp_dir, "pkg_export")
+        manager = MobileSkillManager(temp_dir)
+        export_path = temp_dir / "exported"
+        assert manager.export_skill("pkg_export", export_path) is True
+        assert (export_path / "pkg_export").exists()
+
+    def test_load_skill_file_schema_error(self, temp_dir: Path):
+        code = '''"""
+My skill
+schema: !!invalid [tag
+"""
+async def execute(): return 1
+'''
+        _create_skill_file(temp_dir, "bad_schema", code)
+        manager = MobileSkillManager(temp_dir)
+        skill = manager.get_skill("bad_schema")
+        assert skill is not None
+        assert skill.name == "bad_schema"

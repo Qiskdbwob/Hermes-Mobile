@@ -1,5 +1,7 @@
 """Tests for provider profiles."""
 
+from unittest.mock import patch
+
 from hermes_mobile.providers import (
     AnthropicProfile,
     DeepSeekProfile,
@@ -11,8 +13,12 @@ from hermes_mobile.providers import (
     ProviderProfile,
     TogetherProfile,
     XAIProfile,
+    _DISCOVERED,
+    _discover_providers,
+    _profile_user_agent,
     get_provider_profile,
     list_providers,
+    register_provider,
 )
 
 
@@ -159,3 +165,128 @@ class TestGetProviderProfile:
     def test_all_providers_have_display_name(self):
         for p in list_providers():
             assert p.display_name, f"{p.name}: missing display_name"
+
+
+class TestProfileUserAgent:
+    def test_returns_version_string(self):
+        ua = _profile_user_agent()
+        assert "hermes-mobile" in ua
+
+
+class TestAnthropicProfileExtras:
+    def test_build_api_kwargs_with_reasoning(self):
+        p = AnthropicProfile()
+        result = p.build_api_kwargs_extras(
+            reasoning_config={"type": "thinking", "budget_tokens": 1000}
+        )
+        assert "thinking" in result
+        assert result["thinking"] == {"type": "thinking", "budget_tokens": 1000}
+
+    def test_build_api_kwargs_without_reasoning(self):
+        p = AnthropicProfile()
+        result = p.build_api_kwargs_extras()
+        assert result == {}
+
+
+class TestOllamaProfileHostname:
+    def test_ollama_hostname(self):
+        p = OllamaProfile()
+        assert p.get_hostname() == "ollama-local"
+
+
+class TestRegisterProvider:
+    def test_register_with_aliases(self):
+        p = ProviderProfile(
+            name="test-provider",
+            aliases=("tp", "testp"),
+            base_url="https://test.api/v1",
+        )
+        register_provider(p)
+        # Should be findable by alias
+        tp = get_provider_profile("tp")
+        assert tp is not None
+        assert tp.name == "test-provider"
+        testp = get_provider_profile("testp")
+        assert testp is not None
+
+
+class TestDiscoveryEdgeCases:
+    def test_get_provider_triggers_discovery(self):
+        # Ensure discovery runs on first get_provider_profile call
+        p = get_provider_profile("openai")
+        assert p is not None
+        assert p.name == "openai"
+
+    def test_list_providers_triggers_discovery(self):
+        providers = list_providers()
+        assert len(providers) >= 9
+
+    def test_discovery_lazy_get_provider(self):
+        saved = _DISCOVERED
+        try:
+            import hermes_mobile.providers as p
+
+            p._DISCOVERED = False
+            p._REGISTRY.clear()
+            p._ALIASES.clear()
+            result = get_provider_profile("openai")
+            assert result is not None
+            assert p._DISCOVERED is True
+        finally:
+            import hermes_mobile.providers as p
+
+            p._DISCOVERED = saved
+            p._discover_providers()
+
+    def test_discovery_lazy_list_providers(self):
+        saved = _DISCOVERED
+        try:
+            import hermes_mobile.providers as p
+
+            p._DISCOVERED = False
+            p._REGISTRY.clear()
+            p._ALIASES.clear()
+            result = list_providers()
+            assert len(result) >= 9
+            assert p._DISCOVERED is True
+        finally:
+            import hermes_mobile.providers as p
+
+            p._DISCOVERED = saved
+            p._discover_providers()
+
+    def test_discover_providers_error_handling(self):
+        saved = _DISCOVERED
+        try:
+            import hermes_mobile.providers as p
+
+            p._DISCOVERED = False
+            p._REGISTRY.clear()
+            p._ALIASES.clear()
+
+            with patch.object(p.OpenAIProfile, "__init__", side_effect=RuntimeError("Init failed")):
+                p._discover_providers()
+                result = list_providers()
+                assert "openai" not in [r.name for r in result]
+        finally:
+            import hermes_mobile.providers as p
+
+            p._DISCOVERED = saved
+            p._discover_providers()
+
+    def test_user_agent_version_import_failure(self):
+        import hermes_mobile
+
+        saved = getattr(hermes_mobile, "__version__", None)
+        try:
+            del hermes_mobile.__version__
+            ua = _profile_user_agent()
+            assert ua == "hermes-mobile"
+        finally:
+            if saved is not None:
+                hermes_mobile.__version__ = saved
+
+    def test_user_agent_normal(self):
+        with patch("hermes_mobile.__version__", "1.2.3", create=True):
+            ua = _profile_user_agent()
+            assert ua == "hermes-mobile/1.2.3"
