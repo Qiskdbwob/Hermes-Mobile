@@ -61,4 +61,4 @@ python.optimize = 2
 android.gradle_dependencies += com.google.firebase:firebase-messaging:23.4.0
 
 # Flet specific
-flet.version = 0.24.0
+flet.version = 0.28.3

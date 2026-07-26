@@ -68,7 +68,12 @@ class HermesMobileApp:
             self.error_message = f"Initialization error: {e}"
             self._show_error_screen()
             return
-        self._build_ui()
+        try:
+            self._build_ui()
+        except Exception as e:
+            logger.error("Failed to build UI: %s", e, exc_info=True)
+            self.error_message = f"UI build error: {e}"
+            self._show_error_screen()
 
     def _setup_page(self):
         """Configure the Flet page"""
@@ -136,36 +141,36 @@ class HermesMobileApp:
     def _build_ui(self):
         """Build the main UI"""
         nav_destinations = [
-            ft.NavigationDestination(
+            ft.NavigationBarDestination(
                 icon=ft.Icons.CHAT_OUTLINED, selected_icon=ft.Icons.CHAT, label=t("nav.chat")
             ),
-            ft.NavigationDestination(
+            ft.NavigationBarDestination(
                 icon=ft.Icons.BUILD_OUTLINED, selected_icon=ft.Icons.BUILD, label=t("nav.tools")
             ),
-            ft.NavigationDestination(
+            ft.NavigationBarDestination(
                 icon=ft.Icons.PSYCHOLOGY_OUTLINED,
                 selected_icon=ft.Icons.PSYCHOLOGY,
                 label=t("nav.memory"),
             ),
-            ft.NavigationDestination(
+            ft.NavigationBarDestination(
                 icon=ft.Icons.EXTENSION_OUTLINED,
                 selected_icon=ft.Icons.EXTENSION,
                 label=t("nav.skills"),
             ),
-            ft.NavigationDestination(
+            ft.NavigationBarDestination(
                 icon=ft.Icons.SCHEDULE_OUTLINED,
                 selected_icon=ft.Icons.SCHEDULE,
                 label=t("nav.cron"),
             ),
-            ft.NavigationDestination(
+            ft.NavigationBarDestination(
                 icon=ft.Icons.HUB_OUTLINED, selected_icon=ft.Icons.HUB, label=t("nav.gateway")
             ),
-            ft.NavigationDestination(
+            ft.NavigationBarDestination(
                 icon=ft.Icons.EXTENSION_OUTLINED,
                 selected_icon=ft.Icons.EXTENSION,
                 label=t("nav.plugins"),
             ),
-            ft.NavigationDestination(
+            ft.NavigationBarDestination(
                 icon=ft.Icons.SETTINGS_OUTLINED,
                 selected_icon=ft.Icons.SETTINGS,
                 label=t("nav.settings"),

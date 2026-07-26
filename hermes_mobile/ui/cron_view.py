@@ -3,6 +3,7 @@
 import flet as ft
 
 from hermes_mobile.cron.scheduler import (
+    create_job,
     delete_job,
     disable_job,
     enable_job,
@@ -10,6 +11,7 @@ from hermes_mobile.cron.scheduler import (
     get_ticker_status,
     list_jobs,
     run_job_now,
+    update_job as _update_job,
 )
 from hermes_mobile.locales import t
 
@@ -245,7 +247,7 @@ class CronView:
         )
         enabled_switch = ft.Switch(label="Enabled", value=True)
 
-        def create_job(e):
+        def handle_create(e):
             try:
                 create_job(
                     name=name_field.value,
@@ -281,7 +283,7 @@ class CronView:
             ),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda e: self.page.close(dialog)),
-                ft.ElevatedButton("Create", on_click=create_job),
+                ft.ElevatedButton("Create", on_click=handle_create),
             ],
         )
         self.page.open(dialog)
@@ -299,9 +301,9 @@ class CronView:
         )
         enabled_switch = ft.Switch(label="Enabled", value=job.enabled)
 
-        def update_job(e):
+        def handle_update(e):
             try:
-                update_job(
+                _update_job(
                     job.id,
                     name=name_field.value,
                     schedule=schedule_field.value,
@@ -336,7 +338,7 @@ class CronView:
             ),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda e: self.page.close(dialog)),
-                ft.ElevatedButton("Save", on_click=update_job),
+                ft.ElevatedButton("Save", on_click=handle_update),
             ],
         )
         self.page.open(dialog)
