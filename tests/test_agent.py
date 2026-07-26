@@ -1,6 +1,8 @@
 """Tests for the agent core (Message, ToolCall, MobileAgent construction)."""
 
 import json
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -155,11 +157,27 @@ class TestMobileAgent:
         assert tool_msg["tool_call_id"] == "call_xyz"
 
     def test_get_tool_schemas(self):
-        """get_tool_schemas returns all 14 built-in tool schemas."""
+        """get_tool_schemas returns all built-in tool schemas."""
         agent = MobileAgent()
         schemas = agent.get_tool_schemas()
         assert len(schemas) >= 13  # All built-in tool schemas
         assert schemas[0]["function"]["name"] == "web_search"
+
+    def test_get_tool_schemas_with_skills(self):
+        """get_tool_schemas includes skill schemas when skill_manager is set."""
+        agent = MobileAgent()
+        mock_skill = MagicMock()
+        mock_skill.get_schema.return_value = {
+            "type": "function",
+            "function": {"name": "my_skill", "description": "Custom skill"},
+        }
+        mock_mgr = MagicMock()
+        mock_mgr.get_active_skills.return_value = [mock_skill]
+        agent.skill_manager = mock_mgr
+        schemas = agent.get_tool_schemas()
+        skill_schemas = [s for s in schemas if s.get("function", {}).get("name") == "my_skill"]
+        assert len(skill_schemas) == 1
+        mock_mgr.get_active_skills.assert_called_once()
 
     def test_on_message_callback(self):
         received = []
@@ -184,6 +202,551 @@ class TestMobileAgent:
         assert "read_file" in tools
         assert "calculate" in tools
         assert "get_time" in tools
+
+    def test_get_api_key_openrouter(self):
+        agent = MobileAgent()
+        agent.settings.openrouter_api_key = "sk-or-v1-xxx"
+        assert agent._get_api_key() == "sk-or-v1-xxx"
+
+    def test_get_api_key_openai(self):
+        agent = MobileAgent(provider="openai")
+        agent.settings.openai_api_key = "sk-openai-xxx"
+        assert agent._get_api_key() == "sk-openai-xxx"
+
+    def test_get_api_key_anthropic(self):
+        agent = MobileAgent(provider="anthropic")
+        agent.settings.anthropic_api_key = "sk-ant-xxx"
+        assert agent._get_api_key() == "sk-ant-xxx"
+
+    def test_get_api_key_gemini(self):
+        agent = MobileAgent(provider="gemini")
+        agent.settings.gemini_api_key = "AIza-xxx"
+        assert agent._get_api_key() == "AIza-xxx"
+
+    def test_get_api_key_unknown(self):
+        agent = MobileAgent()
+        agent.provider = "unknown"
+        assert agent._get_api_key() == ""
+
+    def test_get_base_url_unknown_fallback(self):
+        agent = MobileAgent(provider="openai")
+        agent.settings.openai_api_key = "sk-dummy"
+        agent._init_client()
+        agent.provider = "unknown"
+        assert "openrouter.ai" in agent._get_base_url()
+
+    def test_get_base_url_openai(self):
+        agent = MobileAgent(provider="openai")
+        assert "api.openai.com" in agent._get_base_url()
+
+    def test_get_base_url_anthropic(self):
+        agent = MobileAgent(provider="anthropic")
+        assert "api.anthropic.com" in agent._get_base_url()
+
+    def test_get_base_url_gemini(self):
+        agent = MobileAgent(provider="gemini")
+        assert "generativelanguage.googleapis.com" in agent._get_base_url()
+
+    def test_get_base_url_unknown_fallback(self):
+        agent = MobileAgent(provider="openai")
+        agent.settings.openai_api_key = "sk-fake"
+        agent._init_client()
+        agent.provider = "unknown"
+        assert "openrouter.ai" in agent._get_base_url()
+
+    def test_clear_conversation(self):
+        agent = MobileAgent()
+        agent.add_user_message("Hello")
+        agent.add_assistant_message("Hi")
+        old_id = agent.session_id
+        agent.clear_conversation()
+        assert agent.messages == []
+        assert agent.session_id != old_id
+        assert agent.iteration == 0
+
+    def test_set_tools(self):
+        agent = MobileAgent()
+        agent.set_tools([{"name": "my_tool"}])
+        assert agent.tools == [{"name": "my_tool"}]
+
+    @patch("hermes_mobile.core.agent.web_search_tool")
+    async def test_tool_web_search(self, mock_search):
+        mock_search.return_value = {"results": ["item1"]}
+        agent = MobileAgent()
+        result = await agent._tool_web_search("test query")
+        assert result == {"results": ["item1"]}
+        mock_search.assert_called_once_with("test query", max_results=5)
+
+    async def test_tool_get_time(self):
+        agent = MobileAgent()
+        result = await agent._tool_get_time()
+        assert "T" in result  # ISO format has T separator
+
+    @patch("hermes_mobile.core.agent.safe_calculate")
+    async def test_tool_calculate(self, mock_calc):
+        mock_calc.return_value = 42
+        agent = MobileAgent()
+        result = await agent._tool_calculate("6 * 7")
+        assert result == 42
+        mock_calc.assert_called_once_with("6 * 7")
+
+    @patch("hermes_mobile.core.agent.validate_and_resolve_path")
+    async def test_tool_read_file_success(self, mock_validate):
+        mock_path = MagicMock()
+        mock_path.read_text.return_value = "file content"
+        mock_validate.return_value = (mock_path, None)
+        agent = MobileAgent()
+        result = await agent._tool_read_file("/tmp/test.txt")
+        assert result == "file content"
+
+    @patch("hermes_mobile.core.agent.validate_and_resolve_path")
+    async def test_tool_read_file_error(self, mock_validate):
+        mock_validate.return_value = (None, "Path traversal detected")
+        agent = MobileAgent()
+        result = await agent._tool_read_file("../../etc/passwd")
+        assert "Error" in result
+        assert "Path traversal" in result
+
+    @patch("hermes_mobile.core.agent.validate_and_resolve_path")
+    async def test_tool_write_file_success(self, mock_validate):
+        mock_path = MagicMock(spec=Path)
+        mock_validate.return_value = (mock_path, None)
+        agent = MobileAgent()
+        result = await agent._tool_write_file("/tmp/test.txt", "content")
+        assert "File written to" in result
+        mock_path.parent.mkdir.assert_called_once()
+        mock_path.write_text.assert_called_once_with("content")
+
+    @patch("hermes_mobile.core.agent.validate_and_resolve_path")
+    async def test_tool_list_files_success(self, mock_validate):
+        mock_path = MagicMock()
+        mock_path.iterdir.return_value = [Path("/tmp/a.txt"), Path("/tmp/b.txt")]
+        mock_validate.return_value = (mock_path, None)
+        agent = MobileAgent()
+        result = await agent._tool_list_files("/tmp")
+        assert len(result) == 2
+
+    @patch("hermes_mobile.core.agent.validate_and_resolve_path")
+    async def test_tool_list_files_with_current_dir(self, mock_validate):
+        agent = MobileAgent()
+        result = await agent._tool_list_files(".")
+        assert isinstance(result, list)
+
+    @patch("hermes_mobile.core.agent.asyncio.create_subprocess_shell")
+    async def test_tool_run_command(self, mock_subprocess):
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"stdout here", b"")
+        mock_proc.returncode = 0
+        mock_subprocess.return_value = mock_proc
+        agent = MobileAgent()
+        result = await agent._tool_run_command("echo hello")
+        assert result["stdout"] == "stdout here"
+        assert result["returncode"] == 0
+
+    @patch("hermes_mobile.core.agent.delegate_parallel_tasks")
+    async def test_tool_delegate_tasks(self, mock_delegate):
+        mock_delegate.return_value = {"results": ["task done"]}
+        agent = MobileAgent()
+        result = await agent._tool_delegate_tasks(["task1"], context="ctx")
+        assert result == {"results": ["task done"]}
+        mock_delegate.assert_called_once_with(["task1"], context="ctx")
+
+    @patch("hermes_mobile.core.agent.clarify_tool")
+    async def test_tool_clarify(self, mock_clarify):
+        mock_clarify.return_value = {"suggestions": ["Did you mean X?"]}
+        agent = MobileAgent()
+        result = await agent._tool_clarify("test topic", context="ctx")
+        assert result == {"suggestions": ["Did you mean X?"]}
+
+    @patch("hermes_mobile.core.agent.validate_and_resolve_path")
+    async def test_tool_read_file_exception(self, mock_validate):
+        mock_path = MagicMock()
+        mock_path.read_text.side_effect = PermissionError("Permission denied")
+        mock_validate.return_value = (mock_path, None)
+        agent = MobileAgent()
+        result = await agent._tool_read_file("/tmp/restricted.txt")
+        assert "Error reading file" in result
+        assert "Permission denied" in result
+
+    @patch("hermes_mobile.core.agent.validate_and_resolve_path")
+    async def test_tool_write_file_error(self, mock_validate):
+        mock_validate.return_value = (None, "Invalid path")
+        agent = MobileAgent()
+        result = await agent._tool_write_file("/bad/path", "content")
+        assert "Error" in result
+
+    @patch("hermes_mobile.core.agent.validate_and_resolve_path")
+    async def test_tool_write_file_exception(self, mock_validate):
+        mock_path = MagicMock(spec=Path)
+        mock_path.parent.mkdir.side_effect = OSError("Filesystem full")
+        mock_validate.return_value = (mock_path, None)
+        agent = MobileAgent()
+        result = await agent._tool_write_file("/tmp/test.txt", "content")
+        assert "Error writing file" in result
+
+    @patch("hermes_mobile.core.agent.validate_and_resolve_path")
+    async def test_tool_list_files_error(self, mock_validate):
+        mock_validate.return_value = (None, "Traversal blocked")
+        agent = MobileAgent()
+        result = await agent._tool_list_files("/etc")
+        assert "Error" in result[0]
+
+    @patch("hermes_mobile.core.agent.validate_and_resolve_path")
+    async def test_tool_list_files_exception(self, mock_validate):
+        mock_path = MagicMock()
+        mock_path.iterdir.side_effect = PermissionError("No access")
+        mock_validate.return_value = (mock_path, None)
+        agent = MobileAgent()
+        result = await agent._tool_list_files("/protected")
+        assert "Error" in result[0]
+
+    async def test_tool_run_command_exception(self):
+        agent = MobileAgent()
+        result = await agent._tool_run_command(None)  # type: ignore[arg-type]
+        assert "error" in result
+
+    @patch("hermes_mobile.core.agent.web_extract_tool")
+    async def test_tool_web_extract(self, mock_extract):
+        mock_extract.return_value = {"content": "page text"}
+        agent = MobileAgent()
+        result = await agent._tool_web_extract(["https://example.com"])
+        assert result == {"content": "page text"}
+        mock_extract.assert_called_once_with(["https://example.com"], format="text")
+
+    @patch("hermes_mobile.core.agent.session_search_tool")
+    async def test_tool_session_search(self, mock_search):
+        mock_search.return_value = {"sessions": [{"id": "1"}]}
+        agent = MobileAgent()
+        agent.memory_provider = MagicMock()
+        result = await agent._tool_session_search("past question")
+        assert result == {"sessions": [{"id": "1"}]}
+        mock_search.assert_called_once_with(
+            "past question", limit=5, memory_provider=agent.memory_provider
+        )
+
+    @patch("hermes_mobile.core.agent.memory_tool")
+    async def test_tool_memory(self, mock_memory):
+        mock_memory.return_value = {"stored": True}
+        agent = MobileAgent()
+        agent.memory_provider = MagicMock()
+        result = await agent._tool_memory("store", key="k", value="v")
+        assert result == {"stored": True}
+        mock_memory.assert_called_once_with(
+            action="store",
+            key="k",
+            value="v",
+            query=None,
+            limit=5,
+            memory_provider=agent.memory_provider,
+        )
+
+    @patch("hermes_mobile.core.agent.browser_navigate_tool")
+    async def test_tool_browser_navigate(self, mock_nav):
+        mock_nav.return_value = {"url": "https://example.com", "content": "page"}
+        agent = MobileAgent()
+        result = await agent._tool_browser_navigate("https://example.com")
+        assert result == {"url": "https://example.com", "content": "page"}
+        mock_nav.assert_called_once_with("https://example.com")
+
+    @patch("hermes_mobile.core.agent.browser_snapshot_tool")
+    async def test_tool_browser_snapshot(self, mock_snap):
+        mock_snap.return_value = {"snapshot": "textual content"}
+        agent = MobileAgent()
+        result = await agent._tool_browser_snapshot("https://example.com")
+        assert result == {"snapshot": "textual content"}
+        mock_snap.assert_called_once_with("https://example.com")
+
+    def test_extract_tool_calls_empty(self):
+        response = MagicMock()
+        response.choices[0].message.tool_calls = None
+        agent = MobileAgent()
+        result = agent._extract_tool_calls(response)
+        assert result == []
+
+    def test_extract_tool_calls_with_tools(self):
+        response = MagicMock()
+        mock_tc = MagicMock()
+        mock_tc.id = "call_abc"
+        mock_tc.function.name = "web_search"
+        mock_tc.function.arguments = '{"query": "test"}'
+        response.choices[0].message.tool_calls = [mock_tc]
+        agent = MobileAgent()
+        result = agent._extract_tool_calls(response)
+        assert len(result) == 1
+        assert result[0].name == "web_search"
+        assert result[0].call_id == "call_abc"
+        assert result[0].arguments == {"query": "test"}
+
+    def test_extract_tool_calls_bad_json(self):
+        response = MagicMock()
+        mock_tc = MagicMock()
+        mock_tc.id = "call_bad"
+        mock_tc.function.name = "bad_tool"
+        mock_tc.function.arguments = "not valid json{{{"
+        response.choices[0].message.tool_calls = [mock_tc]
+        agent = MobileAgent()
+        result = agent._extract_tool_calls(response)
+        assert len(result) == 1
+        assert result[0].arguments == {}
+
+    async def test_execute_tool_calls_success(self):
+        agent = MobileAgent()
+        tc = ToolCall(name="get_time", arguments={})
+        await agent._execute_tool_calls([tc])
+        assert tc.result is not None
+        assert tc.completed_at is not None
+        assert len(agent.messages) == 1
+        assert agent.messages[0].role == "tool"
+
+    async def test_execute_tool_calls_error(self):
+        agent = MobileAgent()
+        tc = ToolCall(name="nonexistent_tool", arguments={})
+        await agent._execute_tool_calls([tc])
+        assert tc.error is not None
+        assert "Unknown tool" in tc.error
+
+    async def test_execute_tool_calls_callback(self):
+        calls = []
+
+        def on_tool_call(tc):
+            calls.append(("call", tc.name))
+
+        def on_tool_result(tc):
+            calls.append(("result", tc.name))
+
+        agent = MobileAgent(on_tool_call=on_tool_call, on_tool_result=on_tool_result)
+        tc = ToolCall(name="get_time", arguments={})
+        await agent._execute_tool_calls([tc])
+        assert len(calls) == 2
+        assert calls[0] == ("call", "get_time")
+        assert calls[1] == ("result", "get_time")
+
+    async def test_execute_tool_builtin(self):
+        agent = MobileAgent()
+        result = await agent._execute_tool("get_time", {})
+        assert result is not None
+
+    async def test_execute_tool_skill(self):
+        mock_skill = AsyncMock()
+        mock_skill.execute.return_value = "skill result"
+        agent = MobileAgent()
+        agent.skill_manager = MagicMock()
+        agent.skill_manager.get_skill.return_value = mock_skill
+        result = await agent._execute_tool("my_skill", {"query": "test"})
+        assert result == "skill result"
+        mock_skill.execute.assert_called_once_with(query="test")
+
+    async def test_execute_tool_unknown(self):
+        agent = MobileAgent()
+        with pytest.raises(ValueError, match="Unknown tool"):
+            await agent._execute_tool("no_such_tool", {})
+
+    @patch("hermes_mobile.core.agent.compress_messages")
+    def test_apply_compression_system_user(self, mock_compress):
+        mock_compress.return_value = [
+            {"role": "system", "content": "System"},
+            {"role": "user", "content": "Hello"},
+        ]
+        agent = MobileAgent()
+        agent.add_user_message("Hello")
+        result = agent._apply_compression()
+        assert len(result) == 2
+        assert result[0].role == "system"
+        assert result[1].role == "user"
+
+    @patch("hermes_mobile.core.agent.compress_messages")
+    def test_apply_compression_all_roles(self, mock_compress):
+        mock_compress.return_value = [
+            {"role": "system", "content": "System prompt"},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+            {
+                "role": "tool",
+                "content": '{"result": "ok"}',
+                "tool_call_id": "call_1",
+                "name": "web_search",
+            },
+        ]
+        agent = MobileAgent()
+        agent.add_user_message("Hello")
+        result = agent._apply_compression()
+        assert len(result) == 4
+        assert result[0].role == "system"
+        assert result[1].role == "user"
+        assert result[2].role == "assistant"
+        assert result[3].role == "tool"
+        assert result[3].tool_call_id == "call_1"
+        assert result[3].name == "web_search"
+
+    @patch("hermes_mobile.core.agent.MobileMemoryProvider")
+    @patch("hermes_mobile.core.agent.MobileSkillManager")
+    @patch("hermes_mobile.core.agent.get_settings")
+    def test_create_mobile_agent(self, mock_settings, mock_skill_mgr, mock_mem_provider):
+        mock_settings.return_value.default_model = "gpt-4o"
+        mock_settings.return_value.default_provider = "openai"
+        mock_settings.return_value.get_memory_db_path.return_value = ":memory:"
+        mock_settings.return_value.encrypt_memory = False
+        mock_settings.return_value.get_skills_dir.return_value = "/tmp/skills"
+        agent = create_mobile_agent()
+        assert isinstance(agent, MobileAgent)
+        assert agent.model == "gpt-4o"
+        assert agent.provider == "openai"
+        assert len(agent.tools) > 0
+
+    @patch("hermes_mobile.memory.provider.MobileMemoryProvider")
+    @patch("hermes_mobile.skills.manager.MobileSkillManager")
+    @patch("hermes_mobile.core.agent.get_settings")
+    def test_create_mobile_agent(self, mock_settings, mock_skill_mgr, mock_mem_provider):
+        mock_settings.return_value.default_model = "gpt-4o"
+        mock_settings.return_value.default_provider = "openai"
+        mock_settings.return_value.get_memory_db_path.return_value = ":memory:"
+        mock_settings.return_value.encrypt_memory = False
+        mock_settings.return_value.get_skills_dir.return_value = "/tmp/skills"
+        agent = create_mobile_agent()
+        assert isinstance(agent, MobileAgent)
+        assert agent.model == "gpt-4o"
+        assert agent.provider == "openai"
+        assert len(agent.tools) > 0
+
+    @patch("hermes_mobile.memory.provider.MobileMemoryProvider")
+    @patch("hermes_mobile.skills.manager.MobileSkillManager")
+    @patch("hermes_mobile.core.agent.get_settings")
+    def test_create_mobile_agent_custom(self, mock_settings, mock_skill_mgr, mock_mem_provider):
+        mock_settings.return_value.default_model = "gpt-4o"
+        mock_settings.return_value.default_provider = "openai"
+        mock_settings.return_value.get_memory_db_path.return_value = ":memory:"
+        mock_settings.return_value.encrypt_memory = False
+        mock_settings.return_value.get_skills_dir.return_value = "/tmp/skills"
+        agent = create_mobile_agent(model="claude-3", provider="anthropic")
+        assert agent.model == "claude-3"
+        assert agent.provider == "anthropic"
+
+
+class TestAgentRunConversation:
+    @pytest.fixture
+    def agent(self):
+        return MobileAgent()
+
+    @pytest.fixture
+    def mock_response(self):
+        resp = MagicMock()
+        resp.choices = [MagicMock()]
+        resp.choices[0].message = MagicMock()
+        resp.choices[0].message.content = "Hello back!"
+        resp.choices[0].message.tool_calls = None
+        return resp
+
+    @pytest.fixture
+    def mock_stream_chunk(self):
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta = MagicMock()
+        chunk.choices[0].delta.content = "Hello "
+        chunk.choices[0].delta.tool_calls = None
+        return chunk
+
+    @patch("hermes_mobile.core.agent.needs_compression")
+    async def test_run_conversation_simple(self, mock_needs_compression, agent, mock_response):
+        mock_needs_compression.return_value = False
+        agent._client = MagicMock()
+        agent._client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        results = []
+        async for chunk in agent.run_conversation("Hello", stream=False):
+            results.append(chunk)
+
+        assert "".join(results) == "Hello back!"
+        assert len(agent.messages) >= 1  # user message added
+
+    @patch("hermes_mobile.core.agent.needs_compression")
+    async def test_run_conversation_streaming(
+        self, mock_needs_compression, agent, mock_stream_chunk
+    ):
+        mock_needs_compression.return_value = False
+        mock_async_gen = MagicMock()
+        mock_async_gen.__aiter__.return_value = [mock_stream_chunk]
+        agent._client = MagicMock()
+        agent._client.chat.completions.create = AsyncMock(return_value=mock_async_gen)
+
+        results = []
+        async for chunk in agent.run_conversation("Hello", stream=True):
+            results.append(chunk)
+
+        assert "".join(results) == "Hello "
+        assert len(agent.messages) >= 1
+
+    @patch("hermes_mobile.core.agent.needs_compression")
+    async def test_run_conversation_tool_call_flow(self, mock_needs_compression, agent):
+        mock_needs_compression.return_value = False
+        agent._client = MagicMock()
+
+        # First API call returns a tool call
+        tool_response = MagicMock()
+        tool_response.choices = [MagicMock()]
+        tool_response.choices[0].message.content = "Let me search"
+        mock_tc = MagicMock()
+        mock_tc.id = "call_1"
+        mock_tc.function.name = "get_time"
+        mock_tc.function.arguments = "{}"
+        tool_response.choices[0].message.tool_calls = [mock_tc]
+
+        # Second API call returns final response (no tool calls)
+        final_response = MagicMock()
+        final_response.choices = [MagicMock()]
+        final_response.choices[0].message.content = "Done!"
+        final_response.choices[0].message.tool_calls = None
+
+        agent._client.chat.completions.create = AsyncMock(
+            side_effect=[tool_response, final_response]
+        )
+
+        results = []
+        async for chunk in agent.run_conversation("What time is it?", stream=False):
+            results.append(chunk)
+
+        combined = "".join(results)
+        assert "Let me search" in combined
+        assert "Done!" in combined
+
+    @patch("hermes_mobile.core.agent.needs_compression")
+    async def test_run_conversation_compression_triggered(
+        self, mock_needs_compression, agent, mock_response
+    ):
+        mock_needs_compression.side_effect = [True, False]
+        agent._apply_compression = MagicMock(return_value=[])
+        agent._client = MagicMock()
+        agent._client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        results = []
+        async for chunk in agent.run_conversation("Long message", stream=False):
+            results.append(chunk)
+
+        assert "".join(results) == "Hello back!"
+        agent._apply_compression.assert_called_once()
+
+    @patch("hermes_mobile.core.agent.needs_compression")
+    async def test_run_conversation_api_error(self, mock_needs_compression, agent):
+        mock_needs_compression.return_value = False
+        agent._client = MagicMock()
+        agent._client.chat.completions.create = AsyncMock(side_effect=RuntimeError("API failure"))
+
+        results = []
+        async for chunk in agent.run_conversation("Hello", stream=False):
+            results.append(chunk)
+
+        assert "Error" in "".join(results)
+
+    @patch("hermes_mobile.core.agent.needs_compression")
+    async def test_run_conversation_memory_save(self, mock_needs_compression, agent, mock_response):
+        mock_needs_compression.return_value = False
+        agent._client = MagicMock()
+        agent._client.chat.completions.create = AsyncMock(return_value=mock_response)
+        agent.memory_provider = AsyncMock()
+
+        async for _ in agent.run_conversation("Remember this", stream=False):
+            pass
+
+        agent.memory_provider.save_conversation.assert_awaited_once()
 
 
 class TestContextCompressor:
