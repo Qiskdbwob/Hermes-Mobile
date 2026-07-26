@@ -411,6 +411,9 @@ class TestTicker:
         scheduler._ticker_stop_event.clear()
         scheduler._ticker_thread = None
         scheduler._ticker_running = False
+        # Clear saved jobs between tests to prevent cross-test contamination
+        if scheduler._get_jobs_file().exists():
+            scheduler._get_jobs_file().unlink()
         yield
         scheduler._ticker_stop_event = original_stop
         scheduler._ticker_thread = original_thread
