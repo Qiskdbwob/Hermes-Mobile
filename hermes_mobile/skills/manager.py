@@ -54,13 +54,14 @@ class MobileSkill:
         else:
             raise ValueError(f"Unknown skill type for {self.name}")
 
-    async def _execute_python_skill(self, **kwargs) -> Any:
+    async def _execute_python_skill(self, file_path: Optional[Path] = None, **kwargs) -> Any:
         """Execute a Python skill file"""
         import importlib.util
 
-        spec = importlib.util.spec_from_file_location(self.name, self.path)
+        skill_path = file_path or self.path
+        spec = importlib.util.spec_from_file_location(self.name, skill_path)
         if spec is None or spec.loader is None:
-            raise ValueError(f"Could not load skill from {self.path}")
+            raise ValueError(f"Could not load skill from {skill_path}")
 
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -87,7 +88,7 @@ class MobileSkill:
     async def _execute_package_skill(self, **kwargs) -> Any:
         """Execute a package skill"""
         main_path = self.path / "main.py"
-        return await self._execute_python_skill(path=main_path, **kwargs)
+        return await self._execute_python_skill(file_path=main_path, **kwargs)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
