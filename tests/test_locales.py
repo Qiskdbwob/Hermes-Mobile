@@ -50,6 +50,14 @@ class TestLoadLocale:
         monkeypatch.setattr("hermes_mobile.locales._LOCALE_DIR", Path("/nonexistent"))
         assert _load_locale("en") == {}
 
+    def test_corrupt_json_returns_empty(self, monkeypatch, tmp_path):
+        """Loading a file with invalid JSON returns empty dict."""
+        bad_file = tmp_path / "en.json"
+        bad_file.write_text("{invalid json}")
+        monkeypatch.setattr("hermes_mobile.locales._LOCALE_DIR", tmp_path)
+        result = _load_locale("en")
+        assert result == {}
+
 
 class TestInit:
     def teardown_method(self):
@@ -117,6 +125,15 @@ class TestT:
     def test_format_kwargs(self):
         value = t("chat.tool_calling", tool="web_search")
         assert "web_search" in value
+
+    def test_format_kwargs_missing_variable_does_not_crash(self):
+        """When kwargs are missing a variable in the template, it falls back gracefully."""
+        from hermes_mobile.locales import _translations
+
+        _translations["test_greeting"] = "Hello {name}"
+        result = t("test_greeting", wrong_var="foo")
+        assert isinstance(result, str)
+        del _translations["test_greeting"]
 
     def test_empty_translations_returns_key(self, monkeypatch):
         monkeypatch.setattr("hermes_mobile.locales._translations", {})

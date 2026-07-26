@@ -4,10 +4,16 @@ from hermes_mobile.toolsets import (
     HERMES_CORE_TOOLS,
     HERMES_WEBHOOK_SAFE_TOOLS,
     TOOLSETS,
+    TOOL_SCHEMAS,
+    DISTRIBUTIONS,
     ToolCategory,
     get_all_toolsets,
+    get_distribution,
+    get_tool_schema,
+    get_tool_schemas,
     get_toolset,
     get_toolset_info,
+    list_distributions,
     list_toolsets_by_category,
     resolve_toolset,
     validate_toolset,
@@ -250,3 +256,51 @@ class TestListToolsetsByCategory:
         by_cat = list_toolsets_by_category()
         all_listed = [name for names in by_cat.values() for name in names]
         assert len(all_listed) == len(set(all_listed))
+
+
+class TestGetToolSchema:
+    def test_existing_schema(self):
+        schema = get_tool_schema("web_search")
+        assert schema is not None
+        assert "function" in schema
+        assert schema["function"]["name"] == "web_search"
+
+    def test_nonexistent_schema(self):
+        assert get_tool_schema("nonexistent") is None
+
+    def test_get_tool_schemas_multiple(self):
+        schemas = get_tool_schemas(["web_search", "web_extract", "nonexistent"])
+        assert len(schemas) == 2
+        assert all(s["function"]["name"].startswith("web_") for s in schemas)
+
+    def test_get_tool_schemas_empty(self):
+        assert get_tool_schemas([]) == []
+
+
+class TestDistributions:
+    def test_get_existing_distribution(self):
+        dist = get_distribution("default")
+        assert dist is not None
+        assert "description" in dist
+        assert "toolsets" in dist
+
+    def test_get_nonexistent_distribution(self):
+        assert get_distribution("nonexistent") is None
+
+    def test_list_distributions(self):
+        names = list_distributions()
+        assert "default" in names
+        assert len(names) == len(set(names))
+
+
+class TestResolveToolsetEdgeCases:
+    def test_circular_reference_detected(self):
+        """Trigger circular reference protection by passing visited set directly."""
+        tools = resolve_toolset("web", visited={"web"})
+        assert tools == set()
+
+    def test_circular_via_includes(self):
+        """Verify no crash when no actual cycle exists (sanity check)."""
+        tools = resolve_toolset("full_stack")
+        assert isinstance(tools, set)
+        assert len(tools) > 0

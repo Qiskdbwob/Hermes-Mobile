@@ -462,6 +462,108 @@ async def execute(q: str) -> str:
         result = await manager.install_skill_from_url("https://invalid.url/skill.py")
         assert result is None
 
+    @patch("hermes_mobile.skills.manager.subprocess.run")
+    async def test_install_skill_from_github_url(self, mock_run, temp_dir: Path):
+        """GitHub URL install pulls repo via git clone."""
+
+        def _run_side_effect(*args, **kwargs):
+            import os
+
+            cwd = kwargs.get("cwd", ".")
+            tmpdir = Path(cwd)
+            skill_dir = tmpdir / "skill"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            manifest = {
+                "name": "skill",
+                "description": "GitHub skill",
+                "schema": {"type": "object", "properties": {}},
+            }
+            import yaml
+
+            (skill_dir / "skill.yaml").write_text(yaml.dump(manifest))
+            (skill_dir / "main.py").write_text("async def execute(): return 'gh'")
+            mock_proc = MagicMock()
+            mock_proc.returncode = 0
+            return mock_proc
+
+        mock_run.side_effect = _run_side_effect
+
+        manager = MobileSkillManager(temp_dir / "skills_dest")
+        result = await manager.install_skill_from_url("https://github.com/user/hermes-skill")
+        assert result is not None
+        assert result.name == "skill"
+
+    @patch("hermes_mobile.skills.manager.subprocess.run")
+    async def test_install_skill_from_github_url_clone_failure(self, mock_run, temp_dir: Path):
+        """Git clone failure returns None."""
+        mock_process = MagicMock()
+        mock_process.returncode = 1
+        mock_process.stderr = "error"
+        mock_run.return_value = mock_process
+
+        manager = MobileSkillManager(temp_dir)
+        result = await manager.install_skill_from_url("https://github.com/user/hermes-skill")
+        assert result is None
+
+    @patch("hermes_mobile.skills.manager.subprocess.run")
+    async def test_install_skill_from_github_url_overwrite(self, mock_run, temp_dir: Path):
+        """Installing same GitHub URL twice overwrites existing skill."""
+        created_dirs = []
+
+        def _run_side_effect(*args, **kwargs):
+            cwd = kwargs.get("cwd", ".")
+            tmpdir = Path(cwd)
+            skill_dir = tmpdir / "skill"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            manifest = {
+                "name": "skill",
+                "description": "GitHub skill",
+                "schema": {"type": "object", "properties": {}},
+            }
+            import yaml
+
+            (skill_dir / "skill.yaml").write_text(yaml.dump(manifest))
+            (skill_dir / "main.py").write_text("async def execute(): return 'gh'")
+            created_dirs.append(skill_dir)
+            mock_proc = MagicMock()
+            mock_proc.returncode = 0
+            return mock_proc
+
+        mock_run.side_effect = _run_side_effect
+
+        manager = MobileSkillManager(temp_dir / "skills_dest")
+        result1 = await manager.install_skill_from_url("https://github.com/user/hermes-skill")
+        assert result1 is not None
+
+        # Install again to trigger overwrite (rmtree)
+        result2 = await manager.install_skill_from_url("https://github.com/user/hermes-skill")
+        assert result2 is not None
+        assert result2.name == "skill"
+
+    @patch("urllib.request.urlretrieve")
+    async def test_install_skill_from_url_file(self, mock_retrieve, temp_dir: Path):
+        """Non-GitHub URL downloads a single file."""
+        # Create a skill file to "download"
+        skill_content = 'async def execute() -> str:\n    return "downloaded"'
+        skill_file = temp_dir / "downloaded_skill.py"
+        skill_file.write_text(skill_content)
+
+        # Make urlretrieve copy our file to the tmpdir
+        def _fake_retrieve(url, path):
+            import shutil
+
+            shutil.copy2(skill_file, path)
+
+        mock_retrieve.side_effect = _fake_retrieve
+
+        manager = MobileSkillManager(temp_dir / "skills_dest")
+        result = await manager.install_skill_from_url(
+            "https://example.com/skills/downloaded_skill.py"
+        )
+        # The downloaded file is always named "skill.py" internally
+        assert result is not None
+        assert result.name == "skill"
+
     def test_export_package_skill(self, temp_dir: Path):
         pkg_dir = _create_skill_package(temp_dir, "pkg_export")
         manager = MobileSkillManager(temp_dir)

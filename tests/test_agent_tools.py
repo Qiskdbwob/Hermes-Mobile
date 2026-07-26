@@ -59,8 +59,9 @@ class TestSessionSearchTool:
             query="Hello",
             memory_provider=memory_provider,
         )
-        # search_sessions doesn't exist on the provider, so expect an error
-        assert "error" in result
+        assert "sessions" in result
+        assert len(result["sessions"]) >= 1
+        assert result["sessions"][0]["id"] == "session-1"
 
 
 class TestMemoryTool:
@@ -136,6 +137,11 @@ class TestMemoryTool:
         assert result["status"] == "deleted"
         assert result["key"] == "temp"
         mock_provider.delete_memory.assert_awaited_once_with("temp")
+
+    async def test_delete_without_key(self, memory_provider):
+        result = await memory_tool(action="delete", memory_provider=memory_provider)
+        assert "error" in result
+        assert "Key required" in result["error"]
 
 
 class TestSessionSearchToolEdgeCases:

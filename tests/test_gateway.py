@@ -696,3 +696,119 @@ class TestCLIHelpers:
         assert cli_pairing_status("telegram", "cli_status_user") is False
         pm.approve_code(code.code)
         assert cli_pairing_status("telegram", "cli_status_user") is True
+
+
+class TestGatewayMisc:
+    """Additional gateway tests for uncovered edge cases."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_pairing_dir(self, temp_dir):
+        """Isolate pairing manager to a temp directory."""
+        import hermes_mobile.gateway.mobile_gateway as gw
+
+        original_fn = gw._get_pairing_dir
+        gw._get_pairing_dir = lambda: temp_dir / "pairing_misc"
+        gw._pairing_manager = None
+        yield
+        gw._get_pairing_dir = original_fn
+
+    @patch("hermes_mobile.gateway.mobile_gateway.os.getenv")
+    def test_sync_allowlist_add_write_exception(self, mock_getenv):
+        """_sync_allowlist_add handles .env write failure gracefully."""
+        mock_getenv.side_effect = lambda k, d="": (
+            "HERMES_TELEGRAM_ALLOWLIST" if k == "HERMES_TELEGRAM_ALLOWLIST" else d
+        )
+        # Neither .env exists nor env var is writable — should not crash
+        _sync_allowlist_add("telegram", "new_user")
+        # line 91-92: exception handler — at minimum does not raise
+
+    @patch("hermes_mobile.gateway.mobile_gateway.os.getenv")
+    def test_sync_allowlist_remove_approved_flow(self, mock_getenv):
+        """_sync_allowlist_remove called from revoke_code for approved code."""
+        from hermes_mobile.gateway.mobile_gateway import _sync_allowlist_remove
+
+        mock_getenv.side_effect = lambda k, d="": (
+            "HERMES_TEST_ALLOWLIST" if k == "HERMES_TEST_ALLOWLIST" else d
+        )
+        # Should not crash when allowlist env is set but no .env file exists
+        _sync_allowlist_remove("telegram", "some_user")
+
+    @patch("hermes_mobile.gateway.mobile_gateway.create_mobile_agent")
+    @patch("hermes_mobile.gateway.mobile_gateway.MobileMemoryProvider")
+    async def test_handle_message_with_agent_error(self, mock_memory, mock_agent):
+        """GatewayManager.handle_message handles agent errors gracefully."""
+        import hermes_mobile.gateway.mobile_gateway as gw
+
+        gw._pairing_manager = None
+        cfg = GatewayConfig(enabled=False)
+        manager = GatewayManager(cfg)
+        manager.pairing_manager = get_pairing_manager()
+        # Authorize user
+        code = manager.pairing_manager.request_pairing("telegram", "auth_user", "Test")
+        manager.pairing_manager.approve_code(code.code)
+
+        mock_adapter = AsyncMock()
+        mock_adapter.send_message = AsyncMock(return_value="msg_1")
+        manager.adapters = {"telegram": mock_adapter}
+
+        # Mock agent to raise an error during streaming
+        class _RaisingAsyncGen:
+            """Async generator that raises on first iteration."""
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise ValueError("API error")
+
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.run_conversation = MagicMock(return_value=_RaisingAsyncGen())
+        manager.agent = mock_agent_instance
+
+        await manager.handle_message("telegram", "chat_1", "auth_user", "hello", {})
+        # Should send error message back
+        mock_adapter.send_message.assert_called()
+        error_call_args = mock_adapter.send_message.call_args
+        assert "Error" in str(error_call_args)
+
+    @patch("hermes_mobile.gateway.mobile_gateway.create_mobile_agent")
+    @patch("hermes_mobile.gateway.mobile_gateway.MobileMemoryProvider")
+    async def test_stop_with_tasks(self, mock_memory, mock_agent):
+        """GatewayManager.stop cancels background tasks."""
+        cfg = GatewayConfig(enabled=False)
+        manager = GatewayManager(cfg)
+
+        # Add a mock task that will be cancelled
+        async def never_ending():
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                raise
+
+        task = asyncio.create_task(never_ending())
+        manager._tasks.append(task)
+        manager._running = True
+
+        await manager.stop()
+        assert manager._running is False
+        assert task.cancelled()
+
+    async def test_gateway_consumer_finalize_edit_error(self):
+        """GatewayStreamConsumer._finalize handles edit error gracefully."""
+        adapter = AsyncMock()
+        adapter.send_message = AsyncMock(return_value="msg_1")
+        adapter.edit_message = AsyncMock(side_effect=Exception("edit failed"))
+
+        config = StreamConsumerConfig(
+            edit_interval=0.01,
+            buffer_threshold=50,
+            cursor="▌",
+            fresh_message_after=30.0,
+            transport="edit",
+        )
+        consumer = GatewayStreamConsumer(adapter, "chat_1", config, {})
+        consumer.on_delta("Hello world")
+        consumer.finish()
+        result = await consumer.run()
+        # Should not crash — edit error is caught by except Exception
+        assert result is not None

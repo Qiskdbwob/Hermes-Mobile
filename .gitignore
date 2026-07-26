@@ -39,6 +39,12 @@ memory.db
 # Ruff cache
 .ruff_cache/
 
+# Coverage
+.coverage
+
+# Test virtual environment
+.venv_test/
+
 # Logs
 *.log
 build.log

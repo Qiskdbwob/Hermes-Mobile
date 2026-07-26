@@ -330,6 +330,74 @@ class MobileMemoryProvider:
         results.sort(key=lambda x: x["score"], reverse=True)
         return results[:limit]
 
+    async def search_sessions(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """Search conversation sessions by content.
+
+        Uses SQL LIKE for plaintext, Python filtering for encrypted data.
+        Returns a list of session summaries matching the query.
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        keywords = query.lower().split()
+
+        if self.encrypt:
+            cursor.execute(
+                "SELECT DISTINCT session_id FROM conversations ORDER BY timestamp DESC LIMIT ?",
+                (limit * 10,),
+            )
+            results = []
+            for sid_row in cursor.fetchall():
+                sid = sid_row["session_id"]
+                cursor.execute(
+                    "SELECT content, timestamp FROM conversations WHERE session_id = ? ORDER BY timestamp DESC LIMIT 1",
+                    (sid,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    continue
+                content = self._decrypt(row["content"])
+                if any(kw in content.lower() for kw in keywords):
+                    results.append(
+                        {
+                            "id": sid,
+                            "title": content[:80] if content else "Untitled",
+                            "preview": content,
+                            "timestamp": row["timestamp"],
+                        }
+                    )
+                    if len(results) >= limit:
+                        break
+            return results
+
+        like_conditions = " OR ".join("LOWER(c.content) LIKE ?" for _ in keywords)
+        params = [f"%{kw}%" for kw in keywords]
+
+        cursor.execute(
+            f"""
+            SELECT c.session_id, c.content, c.timestamp
+            FROM conversations c
+            WHERE {like_conditions}
+            ORDER BY c.timestamp DESC
+            LIMIT ?
+            """,
+            (*params, limit * 5),
+        )
+
+        seen = {}
+        for row in cursor.fetchall():
+            sid = row["session_id"]
+            if sid in seen:
+                continue
+            content = row["content"]
+            seen[sid] = {
+                "id": sid,
+                "title": content[:80] if content else "Untitled",
+                "preview": content,
+                "timestamp": row["timestamp"],
+            }
+
+        return list(seen.values())[:limit]
+
     async def set_skill_memory(
         self, skill_name: str, key: str, value: Any, ttl_days: Optional[int] = None
     ):

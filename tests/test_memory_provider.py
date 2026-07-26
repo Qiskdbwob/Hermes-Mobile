@@ -231,3 +231,52 @@ class TestMobileMemoryProvider:
         )
         result = mp._decrypt("not-encrypted-data")
         assert result == "not-encrypted-data"
+
+
+class TestSearchSessions:
+    async def test_search_sessions_with_multiple_messages(self, memory_provider):
+        """Multiple messages in same session trigger dedup path (line 363)."""
+        from hermes_mobile.core.agent import Message
+
+        await memory_provider.save_conversation(
+            "session-multi", [Message.user("Hello world"), Message.user("Hello again")]
+        )
+        result = await memory_provider.search_sessions("Hello", limit=5)
+        assert len(result) == 1
+        assert result[0]["id"] == "session-multi"
+
+    async def test_search_sessions_with_encryption(self, temp_dir):
+        """Encrypted provider reaches decrypt path (line 366)."""
+        from hermes_mobile.core.agent import Message
+
+        mp = MobileMemoryProvider(
+            db_path=temp_dir / "search_enc.db",
+            encrypt=True,
+            encryption_key="test-key",
+        )
+        try:
+            await mp.save_conversation("session-enc", [Message.user("Secret data")])
+            result = await mp.search_sessions("Secret")
+            assert len(result) >= 1
+            assert result[0]["id"] == "session-enc"
+        finally:
+            mp.close()
+
+    async def test_search_sessions_encrypted_hits_limit(self, temp_dir):
+        """Encrypted search hits limit and breaks (line 369)."""
+        from hermes_mobile.core.agent import Message
+
+        mp = MobileMemoryProvider(
+            db_path=temp_dir / "search_enc_limit.db",
+            encrypt=True,
+            encryption_key="test-key",
+        )
+        try:
+            for i in range(3):
+                await mp.save_conversation(
+                    f"session-{i}", [Message.user(f"Matching data for session {i}")]
+                )
+            result = await mp.search_sessions("Matching", limit=2)
+            assert len(result) == 2
+        finally:
+            mp.close()
