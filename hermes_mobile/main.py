@@ -247,26 +247,52 @@ class HermesMobileApp:
 
     def _on_navigation_change(self, e):
         """Handle navigation change"""
-        index = e.control.selected_index
-        if self.is_mobile:
-            views = ["chat", "tools", "memory", "skills", "settings"]
-        else:
-            views = ["chat", "tools", "memory", "skills", "cron", "gateway", "plugins", "settings"]
-        self.current_view = views[index]
+        try:
+            # Get selected index from event
+            index = None
+            if hasattr(e, "control") and e.control is not None:
+                index = getattr(e.control, "selected_index", None)
+            if index is None and hasattr(e, "data") and e.data not in (None, ""):
+                index = int(e.data)
+            if index is None:
+                return
 
-        view_map = {
-            "chat": self.chat_view.build(),
-            "tools": self.tools_view.build(),
-            "memory": self.memory_view.build(),
-            "skills": self.skills_view.build(),
-            "cron": self.cron_view.build(),
-            "gateway": self.gateway_view.build(),
-            "plugins": self.plugins_view.build(),
-            "settings": self.settings_view.build(),
-        }
+            if self.is_mobile:
+                views = ["chat", "tools", "memory", "skills", "settings"]
+            else:
+                views = [
+                    "chat",
+                    "tools",
+                    "memory",
+                    "skills",
+                    "cron",
+                    "gateway",
+                    "plugins",
+                    "settings",
+                ]
 
-        self.content_area.content = view_map.get(self.current_view, self.chat_view.build())
-        self.page.update()
+            if index < 0 or index >= len(views):
+                return
+
+            self.current_view = views[index]
+
+            view_map = {
+                "chat": self.chat_view.build(),
+                "tools": self.tools_view.build(),
+                "memory": self.memory_view.build(),
+                "skills": self.skills_view.build(),
+                "cron": self.cron_view.build(),
+                "gateway": self.gateway_view.build(),
+                "plugins": self.plugins_view.build(),
+                "settings": self.settings_view.build(),
+            }
+
+            new_content = view_map.get(self.current_view)
+            if new_content is not None:
+                self.content_area.content = new_content
+                self.page.update()
+        except Exception as ex:
+            print(f"Navigation error: {ex}")
 
     def _on_tool_call(self, tool_call: ToolCall):
         """Handle tool call from agent"""

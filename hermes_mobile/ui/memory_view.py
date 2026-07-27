@@ -1,5 +1,7 @@
 """Memory View - Memory management interface"""
 
+import asyncio
+
 import flet as ft
 
 from hermes_mobile.locales import t
@@ -12,9 +14,13 @@ class MemoryView:
         self.app = app
         self.page = app.page
         self.memory_provider = app.memory_provider
+        self._cached_stats = None
 
     def build(self) -> ft.Control:
         """Build the memory view"""
+        # Schedule async stats refresh
+        asyncio.create_task(self._refresh_stats())
+
         return ft.Column(
             [
                 # Header with stats
@@ -55,19 +61,37 @@ class MemoryView:
             expand=True,
         )
 
+    async def _refresh_stats(self):
+        """Fetch stats asynchronously and update UI"""
+        try:
+            stats = await self.memory_provider.get_stats()
+            self._cached_stats = stats
+            # Update the stats row if the view is currently displayed
+            if self.app.current_view == "memory":
+                self.app.content_area.content = self.build()
+                self.page.update()
+        except Exception:
+            self._cached_stats = {
+                "conversations": 0,
+                "sessions": 0,
+                "memory_entries": 0,
+                "db_size_bytes": 0,
+            }
+
     def _build_stats_row(self) -> ft.Control:
         """Build memory statistics row"""
-        stats = self.memory_provider.get_stats()
-
+        stats = self._cached_stats or {}
         return ft.Row(
             [
-                self._build_stat_card("Conversations", str(stats["conversations"]), ft.Icons.CHAT),
-                self._build_stat_card("Messages", str(stats["messages"]), ft.Icons.MESSAGE),
                 self._build_stat_card(
-                    "Memory Entries", str(stats["memory_entries"]), ft.Icons.MEMORY
+                    "Conversations", str(stats.get("conversations", 0)), ft.Icons.CHAT
+                ),
+                self._build_stat_card("Sessions", str(stats.get("sessions", 0)), ft.Icons.MESSAGE),
+                self._build_stat_card(
+                    "Memory Entries", str(stats.get("memory_entries", 0)), ft.Icons.MEMORY
                 ),
                 self._build_stat_card(
-                    "Size", self._format_size(stats["db_size_bytes"]), ft.Icons.STORAGE
+                    "Size", self._format_size(stats.get("db_size_bytes", 0)), ft.Icons.STORAGE
                 ),
             ],
             spacing=12,

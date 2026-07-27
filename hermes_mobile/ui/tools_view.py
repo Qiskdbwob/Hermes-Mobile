@@ -110,7 +110,7 @@ class ToolsView:
                                 ),
                                 ft.Chip(
                                     label=ft.Text(f"{tool_count} tools"),
-                                    icon=ft.Icon(ft.Icons.BUILD, size=14),
+                                    leading=ft.Icon(ft.Icons.BUILD, size=14),
                                 ),
                             ],
                             spacing=12,
