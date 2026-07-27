@@ -180,7 +180,7 @@ Each provider is a `ProviderProfile` dataclass with:
 | Voice | TTS/STT in gateway | Not implemented | Gap |
 | Computer Use | macOS CUA driver | Not implemented | Gap |
 | Desktop App | Electron app | Flet desktop mode | OK |
-| Tests | Extensive pytest suite | Zero tests | Critical gap |
+| Tests | Extensive pytest suite | 684 tests (19 files) | Good coverage |
 | Docker | Multi-arch, Docker Compose | Not implemented | Gap |
 | Kanban | Multi-agent kanban board | Plugin stub only | Gap |
 | Smart Home | Home Assistant integration | Tool gating only | Gap |
