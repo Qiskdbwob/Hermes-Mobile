@@ -20,6 +20,7 @@ from hermes_mobile.memory.provider import MobileMemoryProvider
 from hermes_mobile.plugins import get_plugin_registry
 from hermes_mobile.skills.manager import MobileSkillManager
 from hermes_mobile.ui.chat_view import ChatView
+from hermes_mobile.ui.artifacts_view import ArtifactsView
 from hermes_mobile.ui.cron_view import CronView
 from hermes_mobile.ui.gateway_view import GatewayView
 from hermes_mobile.ui.memory_view import MemoryView
@@ -35,20 +36,23 @@ logger = logging.getLogger(__name__)
 class HermesMobileApp:
     """Main Hermes Mobile Application"""
 
-    # Mobile bottom navigation: the five primary destinations. The remaining
-    # views (cron, gateway, plugins) live behind the overflow menu.
-    MOBILE_VIEWS = ["chat", "tools", "memory", "skills", "settings"]
+    # Mobile bottom navigation: primary destinations mirroring the desktop
+    # shell (Chat, Skills, Messaging, Artifacts) + Settings. The remaining
+    # views live behind the overflow menu.
+    MOBILE_VIEWS = ["chat", "skills", "messaging", "artifacts", "settings"]
     DESKTOP_VIEWS = [
         "chat",
+        "skills",
+        "messaging",
+        "artifacts",
         "tools",
         "memory",
-        "skills",
         "cron",
         "gateway",
         "plugins",
         "settings",
     ]
-    OVERFLOW_VIEWS = ["cron", "gateway", "plugins"]
+    OVERFLOW_VIEWS = ["tools", "memory", "cron", "gateway", "plugins"]
 
     def __init__(self, page: ft.Page):
         self.page = page
@@ -69,6 +73,7 @@ class HermesMobileApp:
         self.gateway_view: GatewayView = None
         self.plugins_view: PluginsView = None
         self.tools_view: ToolsView = None
+        self.artifacts_view: ArtifactsView = None
 
         # Navigation
         self.current_view = "chat"
@@ -182,6 +187,7 @@ class HermesMobileApp:
         self.gateway_view = GatewayView(self)
         self.plugins_view = PluginsView(self)
         self.tools_view = ToolsView(self)
+        self.artifacts_view = ArtifactsView(self)
 
         # Ensure default cron jobs exist
         ensure_default_jobs()
@@ -193,16 +199,26 @@ class HermesMobileApp:
         def nav_dest(cls, view: str):
             specs = {
                 "chat": (ft.Icons.CHAT_OUTLINED, ft.Icons.CHAT, t("nav.chat")),
+                "skills": (
+                    ft.Icons.EXTENSION_OUTLINED,
+                    ft.Icons.EXTENSION,
+                    t("nav.skills"),
+                ),
+                "messaging": (
+                    ft.Icons.HUB_OUTLINED,
+                    ft.Icons.HUB,
+                    t("nav.messaging"),
+                ),
+                "artifacts": (
+                    ft.Icons.FOLDER_OUTLINED,
+                    ft.Icons.FOLDER,
+                    t("nav.artifacts"),
+                ),
                 "tools": (ft.Icons.BUILD_OUTLINED, ft.Icons.BUILD, t("nav.tools")),
                 "memory": (
                     ft.Icons.PSYCHOLOGY_OUTLINED,
                     ft.Icons.PSYCHOLOGY,
                     t("nav.memory"),
-                ),
-                "skills": (
-                    ft.Icons.EXTENSION_OUTLINED,
-                    ft.Icons.EXTENSION,
-                    t("nav.skills"),
                 ),
                 "cron": (
                     ft.Icons.SCHEDULE_OUTLINED,
@@ -294,6 +310,16 @@ class HermesMobileApp:
             icon=ft.Icons.MORE_VERT,
             tooltip=t("nav.more"),
             items=[
+                ft.PopupMenuItem(
+                    icon=ft.Icons.BUILD,
+                    content=t("nav.tools"),
+                    on_click=lambda e: self._navigate_to("tools"),
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.PSYCHOLOGY,
+                    content=t("nav.memory"),
+                    on_click=lambda e: self._navigate_to("memory"),
+                ),
                 ft.PopupMenuItem(
                     icon=ft.Icons.SCHEDULE,
                     content=t("nav.cron"),
@@ -421,6 +447,8 @@ class HermesMobileApp:
             "tools": self.tools_view.build(),
             "memory": self.memory_view.build(),
             "skills": self.skills_view.build(),
+            "messaging": self.gateway_view.build(),
+            "artifacts": self.artifacts_view.build(),
             "cron": self.cron_view.build(),
             "gateway": self.gateway_view.build(),
             "plugins": self.plugins_view.build(),
@@ -441,6 +469,8 @@ class HermesMobileApp:
                 "tools": t("nav.tools"),
                 "memory": t("nav.memory"),
                 "skills": t("nav.skills"),
+                "messaging": t("nav.messaging"),
+                "artifacts": t("nav.artifacts"),
                 "cron": t("nav.cron"),
                 "gateway": t("nav.gateway"),
                 "plugins": t("nav.plugins"),

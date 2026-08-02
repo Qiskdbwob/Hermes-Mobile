@@ -39,13 +39,27 @@ def get_safe_home_dir() -> Path:
 
 
 def get_allowed_directories() -> list[Path]:
-    """Get the list of directories the agent is allowed to access."""
+    """Get the list of directories the agent is allowed to access.
+
+    Mirrors the desktop contract: the user's document folders plus the
+    current working directory (the app workspace). The workspace is where
+    the agent reads/writes project files; without it the sandbox is useless
+    on mobile where Documents/Downloads often do not exist.
+    """
     home = get_safe_home_dir()
     allowed = [
         home / "Documents",
         home / "Downloads",
         home / "Desktop",
     ]
+    # The app workspace (cwd) is always allowed — the agent must be able to
+    # read and write the files it is working on.
+    try:
+        cwd = Path.cwd().resolve()
+        if cwd not in allowed:
+            allowed.append(cwd)
+    except OSError:
+        pass
     return [d for d in allowed if d.exists()]
 
 

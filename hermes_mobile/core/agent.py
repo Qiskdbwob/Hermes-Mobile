@@ -20,6 +20,16 @@ from hermes_mobile.tools.agent_tools import (
     memory_tool,
     session_search_tool,
 )
+from hermes_mobile.tools.desktop_tools import (
+    cronjob_tool,
+    execute_code_tool,
+    patch_tool,
+    search_files_tool,
+    skill_manage_tool,
+    skill_view_tool,
+    skills_list_tool,
+    todo_tool,
+)
 from hermes_mobile.tools.path_security import validate_and_resolve_path
 from hermes_mobile.tools.security import safe_calculate
 from hermes_mobile.tools.web_tools import (
@@ -395,12 +405,20 @@ class MobileAgent:
             "read_file": self._tool_read_file,
             "write_file": self._tool_write_file,
             "list_files": self._tool_list_files,
+            "search_files": self._tool_search_files,
+            "patch": self._tool_patch,
             "run_command": self._tool_run_command,
+            "execute_code": self._tool_execute_code,
             "get_time": self._tool_get_time,
             "calculate": self._tool_calculate,
             "session_search": self._tool_session_search,
             "memory": self._tool_memory,
             "clarify": self._tool_clarify,
+            "todo": self._tool_todo,
+            "skills_list": self._tool_skills_list,
+            "skill_view": self._tool_skill_view,
+            "skill_manage": self._tool_skill_manage,
+            "cronjob": self._tool_cronjob,
             "browser_navigate": self._tool_browser_navigate,
             "browser_snapshot": self._tool_browser_snapshot,
             "delegate_tasks": self._tool_delegate_tasks,
@@ -444,6 +462,83 @@ class MobileAgent:
             return [str(p) for p in resolved.iterdir()]
         except Exception as e:
             return [f"Error: {e}"]
+
+    async def _tool_search_files(
+        self,
+        pattern: str,
+        path: str = ".",
+        target: str = "content",
+        file_glob: Optional[str] = None,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """Search file contents or filenames."""
+        return await search_files_tool(
+            pattern=pattern,
+            path=path,
+            target=target,
+            file_glob=file_glob,
+            limit=limit,
+        )
+
+    async def _tool_patch(
+        self,
+        path: str,
+        old_string: str,
+        new_string: str = "",
+        replace_all: bool = False,
+    ) -> Dict[str, Any]:
+        """Patch a file with a find-and-replace edit."""
+        return await patch_tool(
+            path=path,
+            old_string=old_string,
+            new_string=new_string,
+            replace_all=replace_all,
+        )
+
+    async def _tool_execute_code(self, code: str, timeout: int = 60) -> Dict[str, Any]:
+        """Execute Python code in a sandboxed subprocess."""
+        return await execute_code_tool(code=code, timeout=timeout)
+
+    async def _tool_todo(
+        self,
+        action: str,
+        item_id: Optional[int] = None,
+        content: Optional[str] = None,
+        status: str = "pending",
+    ) -> Dict[str, Any]:
+        """Manage the agent task list."""
+        return await todo_tool(
+            action=action,
+            item_id=item_id,
+            content=content,
+            status=status,
+        )
+
+    async def _tool_skills_list(self) -> Dict[str, Any]:
+        """List installed skills."""
+        return await skills_list_tool(self.skill_manager)
+
+    async def _tool_skill_view(self, name: str) -> Dict[str, Any]:
+        """View a skill's metadata and schema."""
+        return await skill_view_tool(name, self.skill_manager)
+
+    async def _tool_skill_manage(
+        self,
+        action: str,
+        name: str,
+        url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Enable, disable, remove or install a skill."""
+        return await skill_manage_tool(
+            action=action,
+            name=name,
+            url=url,
+            skill_manager=self.skill_manager,
+        )
+
+    async def _tool_cronjob(self, action: str, job_id: Optional[str] = None) -> Dict[str, Any]:
+        """List, run, pause or resume cron jobs."""
+        return await cronjob_tool(action=action, job_id=job_id)
 
     async def _tool_run_command(self, command: str, cwd: Optional[str] = None) -> Dict[str, Any]:
         """Run a shell command"""
@@ -720,6 +815,124 @@ class MobileAgent:
                                 "url": {"type": "string", "description": "URL to snapshot"},
                             },
                             "required": ["url"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_files",
+                        "description": "Search file contents with a regex or find files by name",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "pattern": {"type": "string", "description": "Regex pattern to search for"},
+                                "path": {"type": "string", "description": "Directory to search in", "default": "."},
+                                "target": {"type": "string", "enum": ["content", "files"], "default": "content"},
+                                "file_glob": {"type": "string", "description": "Optional filename filter"},
+                                "limit": {"type": "integer", "default": 50},
+                            },
+                            "required": ["pattern"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "patch",
+                        "description": "Edit a file by replacing an exact string (old_string) with new_string",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string", "description": "File path"},
+                                "old_string": {"type": "string", "description": "Exact text to find"},
+                                "new_string": {"type": "string", "description": "Replacement text"},
+                                "replace_all": {"type": "boolean", "default": False},
+                            },
+                            "required": ["path", "old_string"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "execute_code",
+                        "description": "Execute Python code in a sandboxed subprocess and return stdout/stderr",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "code": {"type": "string", "description": "Python code to run"},
+                                "timeout": {"type": "integer", "default": 60},
+                            },
+                            "required": ["code"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "todo",
+                        "description": "Manage a task list (add/update/remove/list)",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "action": {"type": "string", "enum": ["add", "update", "remove", "list"]},
+                                "item_id": {"type": "integer", "description": "Item id for update/remove"},
+                                "content": {"type": "string", "description": "Task text for add"},
+                                "status": {"type": "string", "enum": ["pending", "in_progress", "completed"], "default": "pending"},
+                            },
+                            "required": ["action"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "skills_list",
+                        "description": "List installed skills",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "skill_view",
+                        "description": "View a skill's metadata and schema",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"name": {"type": "string", "description": "Skill name"}},
+                            "required": ["name"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "skill_manage",
+                        "description": "Enable, disable, remove or install a skill",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "action": {"type": "string", "enum": ["enable", "disable", "remove", "install"]},
+                                "name": {"type": "string", "description": "Skill name"},
+                                "url": {"type": "string", "description": "URL for install"},
+                            },
+                            "required": ["action", "name"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "cronjob",
+                        "description": "List, run, pause or resume cron jobs",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "action": {"type": "string", "enum": ["list", "run", "pause", "resume"]},
+                                "job_id": {"type": "string", "description": "Job id for run/pause/resume"},
+                            },
+                            "required": ["action"],
                         },
                     },
                 },

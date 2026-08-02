@@ -13,7 +13,9 @@
     "cron": "Cron",
     "gateway": "Gateway",
     "plugins": "Plugins",
-    "more": "More"
+    "more": "More",
+    "messaging": "Messaging",
+    "artifacts": "Artifacts"
   },
   "chat": {
     "welcome": "Welcome to Hermes Mobile! I'm your AI assistant.",

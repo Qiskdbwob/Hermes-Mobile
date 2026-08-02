@@ -13,7 +13,9 @@
     "cron": "Tarefas",
     "gateway": "Gateway",
     "plugins": "Plugins",
-    "more": "Mais"
+    "more": "Mais",
+    "messaging": "Mensagens",
+    "artifacts": "Artefatos"
   },
   "chat": {
     "welcome": "Bem-vindo ao Hermes Mobile! Sou seu assistente IA.",
