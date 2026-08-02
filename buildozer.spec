@@ -42,14 +42,11 @@ fullscreen = 0
 log_level = 2
 
 # Warn on root
-warn_on_root = 1
+warn_on_root = 0
 
 # Build
 build_dir = .buildozer
 dist_dir = dist
-
-# Clean
-cleanup = 1
 
 # Exclude patterns
 exclude_patterns = venv,__pycache__,*.pyc,.git,.github,tests,docs,*.md,*.txt,*.rst
@@ -59,6 +56,5 @@ python.optimize = 2
 
 # Android specific build options
 android.gradle_dependencies += com.google.firebase:firebase-messaging:23.4.0
-
-# Flet specific
-flet.version = 0.28.3
+[buildozer]
+warn_on_root = 0
