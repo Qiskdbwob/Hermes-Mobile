@@ -52,6 +52,16 @@ from hermes_mobile.tools.project_tools import (
     project_list_tool,
     project_switch_tool,
 )
+from hermes_mobile.tools.kanban_tools import (
+    kanban_block_tool,
+    kanban_comment_tool,
+    kanban_complete_tool,
+    kanban_create_tool,
+    kanban_list_tool,
+    kanban_move_tool,
+    kanban_show_tool,
+    kanban_unblock_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -443,6 +453,14 @@ class MobileAgent:
             "project_list": self._tool_project_list,
             "project_create": self._tool_project_create,
             "project_switch": self._tool_project_switch,
+            "kanban_list": self._tool_kanban_list,
+            "kanban_create": self._tool_kanban_create,
+            "kanban_show": self._tool_kanban_show,
+            "kanban_move": self._tool_kanban_move,
+            "kanban_complete": self._tool_kanban_complete,
+            "kanban_block": self._tool_kanban_block,
+            "kanban_unblock": self._tool_kanban_unblock,
+            "kanban_comment": self._tool_kanban_comment,
             "delegate_tasks": self._tool_delegate_tasks,
         }
 
@@ -657,6 +675,40 @@ class MobileAgent:
     async def _tool_project_switch(self, name: str) -> Dict[str, Any]:
         """Switch the active project workspace."""
         return await project_switch_tool(name=name, agent=self)
+
+    async def _tool_kanban_list(self, column: Optional[str] = None) -> Dict[str, Any]:
+        """List kanban tasks."""
+        return await kanban_list_tool(column=column)
+
+    async def _tool_kanban_create(
+        self, title: str, description: str = "", column: str = "backlog"
+    ) -> Dict[str, Any]:
+        """Create a kanban task."""
+        return await kanban_create_tool(title=title, description=description, column=column)
+
+    async def _tool_kanban_show(self, task_id: str) -> Dict[str, Any]:
+        """Show a kanban task."""
+        return await kanban_show_tool(task_id=task_id)
+
+    async def _tool_kanban_move(self, task_id: str, column: str) -> Dict[str, Any]:
+        """Move a kanban task between columns."""
+        return await kanban_move_tool(task_id=task_id, column=column)
+
+    async def _tool_kanban_complete(self, task_id: str) -> Dict[str, Any]:
+        """Complete a kanban task."""
+        return await kanban_complete_tool(task_id=task_id)
+
+    async def _tool_kanban_block(self, task_id: str, reason: str = "") -> Dict[str, Any]:
+        """Block a kanban task."""
+        return await kanban_block_tool(task_id=task_id, reason=reason)
+
+    async def _tool_kanban_unblock(self, task_id: str) -> Dict[str, Any]:
+        """Unblock a kanban task."""
+        return await kanban_unblock_tool(task_id=task_id)
+
+    async def _tool_kanban_comment(self, task_id: str, text: str) -> Dict[str, Any]:
+        """Comment on a kanban task."""
+        return await kanban_comment_tool(task_id=task_id, text=text)
 
     async def _tool_delegate_tasks(
         self, tasks: List[str], context: Optional[str] = None
@@ -1086,6 +1138,122 @@ class MobileAgent:
                                 "name": {"type": "string", "description": "Project name"},
                             },
                             "required": ["name"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "kanban_list",
+                        "description": "List kanban tasks, optionally filtered by column (backlog/in_progress/done)",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "column": {"type": "string", "enum": ["backlog", "in_progress", "done"]},
+                            },
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "kanban_create",
+                        "description": "Create a kanban task card",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string", "description": "Task title"},
+                                "description": {"type": "string", "description": "Task description"},
+                                "column": {"type": "string", "enum": ["backlog", "in_progress", "done"], "default": "backlog"},
+                            },
+                            "required": ["title"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "kanban_show",
+                        "description": "Show a single kanban task's detail",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "task_id": {"type": "string", "description": "Task id"},
+                            },
+                            "required": ["task_id"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "kanban_move",
+                        "description": "Move a kanban task to another column",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "task_id": {"type": "string", "description": "Task id"},
+                                "column": {"type": "string", "enum": ["backlog", "in_progress", "done"]},
+                            },
+                            "required": ["task_id", "column"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "kanban_complete",
+                        "description": "Move a kanban task to done",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "task_id": {"type": "string", "description": "Task id"},
+                            },
+                            "required": ["task_id"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "kanban_block",
+                        "description": "Block a kanban task with an optional reason",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "task_id": {"type": "string", "description": "Task id"},
+                                "reason": {"type": "string", "description": "Block reason"},
+                            },
+                            "required": ["task_id"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "kanban_unblock",
+                        "description": "Unblock a kanban task",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "task_id": {"type": "string", "description": "Task id"},
+                            },
+                            "required": ["task_id"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "kanban_comment",
+                        "description": "Add a comment to a kanban task",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "task_id": {"type": "string", "description": "Task id"},
+                                "text": {"type": "string", "description": "Comment text"},
+                            },
+                            "required": ["task_id", "text"],
                         },
                     },
                 },
