@@ -67,6 +67,15 @@ def _now() -> str:
 
 async def kanban_list_tool(column: Optional[str] = None) -> Dict[str, Any]:
     """List tasks, optionally filtered by column."""
+    return _list_impl(column)
+
+
+def kanban_list_sync(column: Optional[str] = None) -> Dict[str, Any]:
+    """Synchronous variant for UI builders (no event loop needed)."""
+    return _list_impl(column)
+
+
+def _list_impl(column: Optional[str]) -> Dict[str, Any]:
     with _lock:
         board = _load_board()
         tasks = board["tasks"]

@@ -29,6 +29,7 @@ from hermes_mobile.ui.settings_view import SettingsView
 from hermes_mobile.ui.skills_view import SkillsView
 from hermes_mobile.ui.tools_view import ToolsView
 from hermes_mobile.ui.terminal_view import TerminalView
+from hermes_mobile.ui.kanban_view import KanbanView
 from hermes_mobile.ui.theme import build_theme, mode_colors
 
 logger = logging.getLogger(__name__)
@@ -52,9 +53,10 @@ class HermesMobileApp:
         "gateway",
         "plugins",
         "terminal",
+        "kanban",
         "settings",
     ]
-    OVERFLOW_VIEWS = ["tools", "memory", "cron", "gateway", "plugins", "terminal"]
+    OVERFLOW_VIEWS = ["tools", "memory", "cron", "gateway", "plugins", "terminal", "kanban"]
 
     def __init__(self, page: ft.Page):
         self.page = page
@@ -77,6 +79,7 @@ class HermesMobileApp:
         self.tools_view: ToolsView = None
         self.artifacts_view: ArtifactsView = None
         self.terminal_view: TerminalView = None
+        self.kanban_view: KanbanView = None
 
         # Navigation
         self.current_view = "chat"
@@ -192,6 +195,7 @@ class HermesMobileApp:
         self.tools_view = ToolsView(self)
         self.artifacts_view = ArtifactsView(self)
         self.terminal_view = TerminalView(self)
+        self.kanban_view = KanbanView(self)
 
         # Ensure default cron jobs exist
         ensure_default_jobs()
@@ -239,6 +243,11 @@ class HermesMobileApp:
                     ft.Icons.TERMINAL_OUTLINED,
                     ft.Icons.TERMINAL,
                     t("nav.terminal"),
+                ),
+                "kanban": (
+                    ft.Icons.VIEW_KANBAN_OUTLINED,
+                    ft.Icons.VIEW_KANBAN,
+                    t("nav.kanban"),
                 ),
                 "settings": (
                     ft.Icons.SETTINGS_OUTLINED,
@@ -348,6 +357,11 @@ class HermesMobileApp:
                     icon=ft.Icons.TERMINAL,
                     content=t("nav.terminal"),
                     on_click=lambda e: self._navigate_to("terminal"),
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.VIEW_KANBAN,
+                    content=t("nav.kanban"),
+                    on_click=lambda e: self._navigate_to("kanban"),
                 ),
                 ft.PopupMenuItem(
                     icon=ft.Icons.SETTINGS,
@@ -467,6 +481,7 @@ class HermesMobileApp:
             "gateway": self.gateway_view.build(),
             "plugins": self.plugins_view.build(),
             "terminal": self.terminal_view.build(),
+            "kanban": self.kanban_view.build(),
             "settings": self.settings_view.build(),
         }
 
@@ -490,6 +505,7 @@ class HermesMobileApp:
                 "gateway": t("nav.gateway"),
                 "plugins": t("nav.plugins"),
                 "terminal": t("nav.terminal"),
+                "kanban": t("nav.kanban"),
                 "settings": t("nav.settings"),
             }
             self._app_bar_title.value = titles.get(view, "Hermes Mobile")

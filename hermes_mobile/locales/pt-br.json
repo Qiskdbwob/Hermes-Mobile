@@ -16,7 +16,8 @@
     "more": "Mais",
     "messaging": "Mensagens",
     "artifacts": "Artefatos",
-    "terminal": "Terminal"
+    "terminal": "Terminal",
+    "kanban": "Kanban"
   },
   "chat": {
     "welcome": "Bem-vindo ao Hermes Mobile! Sou seu assistente IA.",
