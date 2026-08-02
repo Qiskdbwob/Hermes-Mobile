@@ -28,6 +28,7 @@ from hermes_mobile.ui.plugins_view import PluginsView
 from hermes_mobile.ui.settings_view import SettingsView
 from hermes_mobile.ui.skills_view import SkillsView
 from hermes_mobile.ui.tools_view import ToolsView
+from hermes_mobile.ui.terminal_view import TerminalView
 from hermes_mobile.ui.theme import build_theme, mode_colors
 
 logger = logging.getLogger(__name__)
@@ -50,9 +51,10 @@ class HermesMobileApp:
         "cron",
         "gateway",
         "plugins",
+        "terminal",
         "settings",
     ]
-    OVERFLOW_VIEWS = ["tools", "memory", "cron", "gateway", "plugins"]
+    OVERFLOW_VIEWS = ["tools", "memory", "cron", "gateway", "plugins", "terminal"]
 
     def __init__(self, page: ft.Page):
         self.page = page
@@ -74,6 +76,7 @@ class HermesMobileApp:
         self.plugins_view: PluginsView = None
         self.tools_view: ToolsView = None
         self.artifacts_view: ArtifactsView = None
+        self.terminal_view: TerminalView = None
 
         # Navigation
         self.current_view = "chat"
@@ -188,6 +191,7 @@ class HermesMobileApp:
         self.plugins_view = PluginsView(self)
         self.tools_view = ToolsView(self)
         self.artifacts_view = ArtifactsView(self)
+        self.terminal_view = TerminalView(self)
 
         # Ensure default cron jobs exist
         ensure_default_jobs()
@@ -230,6 +234,11 @@ class HermesMobileApp:
                     ft.Icons.EXTENSION_OUTLINED,
                     ft.Icons.EXTENSION,
                     t("nav.plugins"),
+                ),
+                "terminal": (
+                    ft.Icons.TERMINAL_OUTLINED,
+                    ft.Icons.TERMINAL,
+                    t("nav.terminal"),
                 ),
                 "settings": (
                     ft.Icons.SETTINGS_OUTLINED,
@@ -334,6 +343,11 @@ class HermesMobileApp:
                     icon=ft.Icons.EXTENSION,
                     content=t("nav.plugins"),
                     on_click=lambda e: self._navigate_to("plugins"),
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.TERMINAL,
+                    content=t("nav.terminal"),
+                    on_click=lambda e: self._navigate_to("terminal"),
                 ),
                 ft.PopupMenuItem(
                     icon=ft.Icons.SETTINGS,
@@ -452,6 +466,7 @@ class HermesMobileApp:
             "cron": self.cron_view.build(),
             "gateway": self.gateway_view.build(),
             "plugins": self.plugins_view.build(),
+            "terminal": self.terminal_view.build(),
             "settings": self.settings_view.build(),
         }
 
@@ -474,6 +489,7 @@ class HermesMobileApp:
                 "cron": t("nav.cron"),
                 "gateway": t("nav.gateway"),
                 "plugins": t("nav.plugins"),
+                "terminal": t("nav.terminal"),
                 "settings": t("nav.settings"),
             }
             self._app_bar_title.value = titles.get(view, "Hermes Mobile")

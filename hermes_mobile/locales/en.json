@@ -15,7 +15,8 @@
     "plugins": "Plugins",
     "more": "More",
     "messaging": "Messaging",
-    "artifacts": "Artifacts"
+    "artifacts": "Artifacts",
+    "terminal": "Terminal"
   },
   "chat": {
     "welcome": "Welcome to Hermes Mobile! I'm your AI assistant.",
