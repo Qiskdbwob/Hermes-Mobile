@@ -108,10 +108,15 @@ def _scheme(c: dict) -> ft.ColorScheme:
 def build_theme(dark: bool = False) -> ft.Theme:
     """Build a Flet Theme for the requested color mode."""
     c = DARK if dark else LIGHT
+    # Desktop typography stack (apps/desktop presets.ts SYSTEM_SANS)
+    font_family = (
+        '"Segoe UI", -apple-system, BlinkMacSystemFont, "SF Pro Text", '
+        '"SF Pro Display", system-ui, sans-serif'
+    )
     return ft.Theme(
         color_scheme=_scheme(c),
         use_material3=True,
-        font_family="Roboto",
+        font_family=font_family,
         scaffold_bgcolor=c["background"],
         canvas_color=c["background"],
         divider_color=c["border"],

@@ -80,8 +80,45 @@ class ChatView:
         if not self.messages and not self.chat_list.controls:
             self._show_welcome()
 
+        c = mode_colors(self.app.dark_mode)
+
+        # Conversation header: brand + live provider/model status (desktop parity)
+        provider = getattr(self.app.settings, "default_provider", "openrouter")
+        model = getattr(self.app.settings, "default_model", "")
+        short_model = model.split("/")[-1] if "/" in model else model
+        status = f"{provider} · {short_model}"
+
+        header = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(ft.Icons.AUTO_AWESOME, size=18, color=ft.Colors.PRIMARY),
+                    ft.Container(width=8),
+                    ft.Column(
+                        [
+                            ft.Text(
+                                "Hermes Mobile",
+                                size=15,
+                                weight=ft.FontWeight.W_700,
+                                color=c["foreground"],
+                            ),
+                            ft.Text(
+                                status,
+                                size=11,
+                                color=c["muted_foreground"],
+                            ),
+                        ],
+                        spacing=0,
+                    ),
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding.symmetric(horizontal=16, vertical=10),
+            border=ft.Border.only(bottom=ft.BorderSide(1, c["border"])),
+        )
+
         return ft.Column(
             [
+                header,
                 # Status bar
                 ft.Container(
                     content=self.status_text,
@@ -104,7 +141,7 @@ class ChatView:
                         vertical_alignment=ft.CrossAxisAlignment.END,
                     ),
                     padding=ft.Padding.only(left=12, right=12, top=10, bottom=10),
-                    border=ft.Border.only(top=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT)),
+                    border=ft.Border.only(top=ft.BorderSide(1, c["border"])),
                 ),
             ],
             expand=True,
