@@ -143,15 +143,30 @@ class MobileAgent:
         self.max_iterations = self.settings.max_iterations
 
         # Initialize OpenAI-compatible client
-        self._client = None
+        self._client: Optional[Any] = None
+        self._client_error: Optional[str] = None
         self._init_client()
 
     def _init_client(self):
-        """Initialize the OpenAI-compatible client"""
+        """Initialize the OpenAI-compatible client.
+
+        Graceful degradation: if no API key is configured for the active
+        provider, the client stays ``None`` and ``_client_error`` carries a
+        user-facing message instead of raising at startup. The UI can then
+        show a setup prompt instead of an error screen.
+        """
         from openai import AsyncOpenAI
 
         api_key = self._get_api_key()
         base_url = self._get_base_url()
+
+        if not api_key:
+            self._client = None
+            self._client_error = (
+                f"No API key configured for provider '{self.provider}'. "
+                "Open Settings and add your key (e.g. OPENROUTER_API_KEY)."
+            )
+            return
 
         self._client = AsyncOpenAI(
             api_key=api_key,
@@ -159,6 +174,13 @@ class MobileAgent:
             timeout=self.settings.request_timeout,
             max_retries=self.settings.max_retries,
         )
+        self._client_error = None
+
+    def _require_client(self):
+        """Return the client or raise a friendly error when not configured."""
+        if self._client is None:
+            raise RuntimeError(self._client_error or "AI provider not configured.")
+        return self._client
 
     def _get_api_key(self) -> str:
         """Get API key for current provider"""
@@ -283,8 +305,9 @@ class MobileAgent:
     async def _call_model(self, stream: bool = True):
         """Call the model API"""
         messages = self.get_messages_for_api()
+        client = self._require_client()
 
-        return await self._client.chat.completions.create(
+        return await client.chat.completions.create(
             model=self.model,
             messages=messages,
             tools=self.tools if self.tools else None,

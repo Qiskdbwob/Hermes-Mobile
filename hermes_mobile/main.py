@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 
 import flet as ft
 
@@ -26,13 +27,28 @@ from hermes_mobile.ui.plugins_view import PluginsView
 from hermes_mobile.ui.settings_view import SettingsView
 from hermes_mobile.ui.skills_view import SkillsView
 from hermes_mobile.ui.tools_view import ToolsView
-
+from hermes_mobile.ui.theme import build_theme, mode_colors
 
 logger = logging.getLogger(__name__)
 
 
 class HermesMobileApp:
     """Main Hermes Mobile Application"""
+
+    # Mobile bottom navigation: the five primary destinations. The remaining
+    # views (cron, gateway, plugins) live behind the overflow menu.
+    MOBILE_VIEWS = ["chat", "tools", "memory", "skills", "settings"]
+    DESKTOP_VIEWS = [
+        "chat",
+        "tools",
+        "memory",
+        "skills",
+        "cron",
+        "gateway",
+        "plugins",
+        "settings",
+    ]
+    OVERFLOW_VIEWS = ["cron", "gateway", "plugins"]
 
     def __init__(self, page: ft.Page):
         self.page = page
@@ -58,10 +74,19 @@ class HermesMobileApp:
         self.current_view = "chat"
         self.nav = None
         self.content_area = None
+        self.app_bar = None
+        self._nav_destinations = []
+        self._views = list(self.MOBILE_VIEWS)
+
+        # Settings must load before _setup_page so the theme applies
+        try:
+            self.settings = get_settings()
+        except Exception as e:
+            logger.error("Failed to load settings: %s", e, exc_info=True)
+            self.settings = None
 
         self._setup_page()
         try:
-            self.settings = get_settings()
             self._initialize_components()
         except Exception as e:
             logger.error("Failed to initialize components: %s", e, exc_info=True)
@@ -78,21 +103,44 @@ class HermesMobileApp:
     def _setup_page(self):
         """Configure the Flet page"""
         self.page.title = "Hermes Mobile"
-        self.page.theme_mode = ft.ThemeMode.SYSTEM
         self.page.padding = 0
         self.page.spacing = 0
         platform_str = str(getattr(self.page, "platform", ""))
         self.is_mobile = platform_str.lower() in ("android", "ios")
+        # Allow forcing the mobile layout for desktop testing
+        if os.environ.get("HERMES_MOBILE_LAYOUT", "").lower() == "mobile":
+            self.is_mobile = True
 
-        if not self.is_mobile:
-            self.page.window_width = 480
-            self.page.window_height = 860
+        if platform_str.lower() not in ("android", "ios"):
+            # Desktop window: phone-sized so the mobile layout is testable
+            self.page.window = ft.Window(
+                width=480,
+                height=900,
+                resizable=False,
+            )
 
-        # Set up theme
-        self.page.theme = ft.Theme(
-            color_scheme_seed=ft.Colors.BLUE,
-            use_material3=True,
-        )
+        # Apply the "nous" identity (matches Hermes Desktop)
+        theme_setting = str(getattr(self.settings, "theme", "system") or "system").lower()
+        self.page.theme = build_theme(dark=False)
+        self.page.dark_theme = build_theme(dark=True)
+        if theme_setting == "dark":
+            self.page.theme_mode = ft.ThemeMode.DARK
+        elif theme_setting == "light":
+            self.page.theme_mode = ft.ThemeMode.LIGHT
+        else:
+            self.page.theme_mode = ft.ThemeMode.SYSTEM
+
+    @property
+    def dark_mode(self) -> bool:
+        """Whether the effective color mode is dark."""
+        mode = getattr(self.page, "theme_mode", ft.ThemeMode.SYSTEM)
+        if mode == ft.ThemeMode.DARK:
+            return True
+        if mode == ft.ThemeMode.LIGHT:
+            return False
+        # SYSTEM: trust the platform-reported brightness
+        pb = getattr(self.page, "platform_brightness", None)
+        return pb == ft.Brightness.DARK
 
     def _initialize_components(self):
         """Initialize core components"""
@@ -140,42 +188,45 @@ class HermesMobileApp:
 
     def _build_ui(self):
         """Build the main UI"""
-        nav_destinations = [
-            ft.NavigationBarDestination(
-                icon=ft.Icons.CHAT_OUTLINED, selected_icon=ft.Icons.CHAT, label=t("nav.chat")
-            ),
-            ft.NavigationBarDestination(
-                icon=ft.Icons.BUILD_OUTLINED, selected_icon=ft.Icons.BUILD, label=t("nav.tools")
-            ),
-            ft.NavigationBarDestination(
-                icon=ft.Icons.PSYCHOLOGY_OUTLINED,
-                selected_icon=ft.Icons.PSYCHOLOGY,
-                label=t("nav.memory"),
-            ),
-            ft.NavigationBarDestination(
-                icon=ft.Icons.EXTENSION_OUTLINED,
-                selected_icon=ft.Icons.EXTENSION,
-                label=t("nav.skills"),
-            ),
-            ft.NavigationBarDestination(
-                icon=ft.Icons.SCHEDULE_OUTLINED,
-                selected_icon=ft.Icons.SCHEDULE,
-                label=t("nav.cron"),
-            ),
-            ft.NavigationBarDestination(
-                icon=ft.Icons.HUB_OUTLINED, selected_icon=ft.Icons.HUB, label=t("nav.gateway")
-            ),
-            ft.NavigationBarDestination(
-                icon=ft.Icons.EXTENSION_OUTLINED,
-                selected_icon=ft.Icons.EXTENSION,
-                label=t("nav.plugins"),
-            ),
-            ft.NavigationBarDestination(
-                icon=ft.Icons.SETTINGS_OUTLINED,
-                selected_icon=ft.Icons.SETTINGS,
-                label=t("nav.settings"),
-            ),
-        ]
+        self._views = list(self.MOBILE_VIEWS if self.is_mobile else self.DESKTOP_VIEWS)
+
+        def nav_dest(cls, view: str):
+            specs = {
+                "chat": (ft.Icons.CHAT_OUTLINED, ft.Icons.CHAT, t("nav.chat")),
+                "tools": (ft.Icons.BUILD_OUTLINED, ft.Icons.BUILD, t("nav.tools")),
+                "memory": (
+                    ft.Icons.PSYCHOLOGY_OUTLINED,
+                    ft.Icons.PSYCHOLOGY,
+                    t("nav.memory"),
+                ),
+                "skills": (
+                    ft.Icons.EXTENSION_OUTLINED,
+                    ft.Icons.EXTENSION,
+                    t("nav.skills"),
+                ),
+                "cron": (
+                    ft.Icons.SCHEDULE_OUTLINED,
+                    ft.Icons.SCHEDULE,
+                    t("nav.cron"),
+                ),
+                "gateway": (ft.Icons.HUB_OUTLINED, ft.Icons.HUB, t("nav.gateway")),
+                "plugins": (
+                    ft.Icons.EXTENSION_OUTLINED,
+                    ft.Icons.EXTENSION,
+                    t("nav.plugins"),
+                ),
+                "settings": (
+                    ft.Icons.SETTINGS_OUTLINED,
+                    ft.Icons.SETTINGS,
+                    t("nav.settings"),
+                ),
+            }
+            icon, sel_icon, label = specs[view]
+            return cls(icon=icon, selected_icon=sel_icon, label=label)
+
+        bar_destinations = [nav_dest(ft.NavigationBarDestination, v) for v in self._views]
+        rail_destinations = [nav_dest(ft.NavigationRailDestination, v) for v in self._views]
+        self._nav_destinations = bar_destinations
 
         # Content area
         self.content_area = ft.Container(
@@ -184,15 +235,23 @@ class HermesMobileApp:
             padding=0,
         )
 
+        # Brand header (mobile)
+        self.app_bar = self._build_app_bar()
+
         if self.is_mobile:
             self.nav = ft.NavigationBar(
                 selected_index=0,
-                destinations=nav_destinations[:5],
+                destinations=bar_destinations,
                 on_change=self._on_navigation_change,
+                height=64,
             )
             self.page.add(
                 ft.Column(
-                    [self.content_area, self.nav],
+                    [
+                        self.app_bar,
+                        ft.Container(self.content_area, expand=True),
+                        self.nav,
+                    ],
                     expand=True,
                     spacing=0,
                 )
@@ -201,19 +260,96 @@ class HermesMobileApp:
             self.nav = ft.NavigationRail(
                 selected_index=0,
                 label_type=ft.NavigationRailLabelType.ALL,
-                min_width=100,
-                min_extended_width=200,
-                leading=ft.Icon(ft.Icons.AUTO_AWESOME, size=32, color=ft.Colors.PRIMARY),
+                min_width=110,
+                min_extended_width=190,
+                leading=ft.Container(
+                    content=ft.Icon(ft.Icons.AUTO_AWESOME, size=28, color=ft.Colors.PRIMARY),
+                    padding=ft.Padding.only(left=12, top=8, bottom=16),
+                ),
                 group_alignment=-0.9,
-                destinations=nav_destinations,
+                destinations=rail_destinations,
                 on_change=self._on_navigation_change,
             )
             self.page.add(
                 ft.Row(
                     [self.nav, ft.VerticalDivider(width=1), self.content_area],
                     expand=True,
+                    spacing=0,
                 )
             )
+
+    def _build_app_bar(self) -> ft.Control:
+        """Build the brand header shown on mobile."""
+        c = mode_colors(self.dark_mode)
+
+        self._gateway_indicator = ft.Container(
+            width=8,
+            height=8,
+            border_radius=4,
+            bgcolor=c["muted_foreground"],
+            tooltip=t("gateway.offline") if hasattr(t, "gateway") else "Gateway",
+        )
+
+        overflow_menu = ft.PopupMenuButton(
+            icon=ft.Icons.MORE_VERT,
+            tooltip=t("nav.more"),
+            items=[
+                ft.PopupMenuItem(
+                    icon=ft.Icons.SCHEDULE,
+                    content=t("nav.cron"),
+                    on_click=lambda e: self._navigate_to("cron"),
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.HUB,
+                    content=t("nav.gateway"),
+                    on_click=lambda e: self._navigate_to("gateway"),
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.EXTENSION,
+                    content=t("nav.plugins"),
+                    on_click=lambda e: self._navigate_to("plugins"),
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.SETTINGS,
+                    content=t("nav.settings"),
+                    on_click=lambda e: self._navigate_to("settings"),
+                ),
+            ],
+        )
+
+        self._app_bar_title = ft.Text(
+            "Hermes Mobile",
+            size=17,
+            weight=ft.FontWeight.W_700,
+            color=c["foreground"],
+        )
+        self._app_bar_subtitle = ft.Text(
+            "",
+            size=11,
+            color=c["muted_foreground"],
+            visible=False,
+        )
+
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(ft.Icons.AUTO_AWESOME, size=22, color=ft.Colors.PRIMARY),
+                    ft.Column(
+                        [self._app_bar_title, self._app_bar_subtitle],
+                        spacing=0,
+                        alignment=ft.MainAxisAlignment.CENTER,
+                    ),
+                    ft.Container(expand=True),
+                    self._gateway_indicator,
+                    ft.Container(width=4),
+                    overflow_menu,
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=ft.Padding.only(left=16, right=8, top=10, bottom=10),
+            bgcolor=c["sidebar"],
+            border=ft.Border.only(bottom=ft.BorderSide(1, c["sidebar_border"])),
+        )
 
     def _show_error_screen(self):
         """Show error screen if initialization fails"""
@@ -222,14 +358,14 @@ class HermesMobileApp:
             ft.Column(
                 [
                     ft.Container(height=40),
-                    ft.Icon(ft.Icons.ERROR_OUTLINE, size=64, color=ft.Colors.RED_400),
+                    ft.Icon(ft.Icons.ERROR_OUTLINE, size=64, color=ft.Colors.ERROR),
                     ft.Container(height=20),
                     ft.Text("Hermes Mobile - Error", size=24, weight=ft.FontWeight.BOLD),
                     ft.Container(height=10),
                     ft.Text(
                         self.error_message or "Unknown error during initialization",
                         size=14,
-                        color=ft.Colors.GREY_600,
+                        color=ft.Colors.OUTLINE,
                         text_align=ft.TextAlign.CENTER,
                     ),
                     ft.Container(height=20),
@@ -245,10 +381,22 @@ class HermesMobileApp:
         )
         self.page.update()
 
+    def _navigate_to(self, view: str):
+        """Navigate to a view by name (used by overflow menu)."""
+        if view not in self._views:
+            return
+        index = self._views.index(view)
+        self._switch_view(view)
+        if self.nav is not None:
+            try:
+                self.nav.selected_index = index
+            except Exception:
+                pass
+        self.page.update()
+
     def _on_navigation_change(self, e):
         """Handle navigation change"""
         try:
-            # Get selected index from event
             index = None
             if hasattr(e, "control") and e.control is not None:
                 index = getattr(e.control, "selected_index", None)
@@ -257,42 +405,49 @@ class HermesMobileApp:
             if index is None:
                 return
 
-            if self.is_mobile:
-                views = ["chat", "tools", "memory", "skills", "settings"]
-            else:
-                views = [
-                    "chat",
-                    "tools",
-                    "memory",
-                    "skills",
-                    "cron",
-                    "gateway",
-                    "plugins",
-                    "settings",
-                ]
-
-            if index < 0 or index >= len(views):
+            if index < 0 or index >= len(self._views):
                 return
 
-            self.current_view = views[index]
-
-            view_map = {
-                "chat": self.chat_view.build(),
-                "tools": self.tools_view.build(),
-                "memory": self.memory_view.build(),
-                "skills": self.skills_view.build(),
-                "cron": self.cron_view.build(),
-                "gateway": self.gateway_view.build(),
-                "plugins": self.plugins_view.build(),
-                "settings": self.settings_view.build(),
-            }
-
-            new_content = view_map.get(self.current_view)
-            if new_content is not None:
-                self.content_area.content = new_content
-                self.page.update()
+            self._switch_view(self._views[index])
         except Exception as ex:
             print(f"Navigation error: {ex}")
+
+    def _switch_view(self, view: str):
+        """Switch the content area to the given view (preserves state)."""
+        self.current_view = view
+
+        view_map = {
+            "chat": self.chat_view.build(),
+            "tools": self.tools_view.build(),
+            "memory": self.memory_view.build(),
+            "skills": self.skills_view.build(),
+            "cron": self.cron_view.build(),
+            "gateway": self.gateway_view.build(),
+            "plugins": self.plugins_view.build(),
+            "settings": self.settings_view.build(),
+        }
+
+        new_content = view_map.get(view)
+        if new_content is not None and self.content_area is not None:
+            self.content_area.content = new_content
+            self._update_app_bar_title(view)
+            self.page.update()
+
+    def _update_app_bar_title(self, view: str):
+        """Update the mobile header title for the active view."""
+        if self.is_mobile and hasattr(self, "_app_bar_title"):
+            titles = {
+                "chat": "Hermes Mobile",
+                "tools": t("nav.tools"),
+                "memory": t("nav.memory"),
+                "skills": t("nav.skills"),
+                "cron": t("nav.cron"),
+                "gateway": t("nav.gateway"),
+                "plugins": t("nav.plugins"),
+                "settings": t("nav.settings"),
+            }
+            self._app_bar_title.value = titles.get(view, "Hermes Mobile")
+            self.page.update()
 
     def _on_tool_call(self, tool_call: ToolCall):
         """Handle tool call from agent"""
@@ -326,6 +481,7 @@ class HermesMobileApp:
     def reload_settings(self):
         """Reload settings and reinitialize components"""
         self.settings = reload_settings()
+        self._setup_page()
         self._initialize_components()
         self._build_ui()
 

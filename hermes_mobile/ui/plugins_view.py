@@ -6,7 +6,7 @@ import flet as ft
 
 from hermes_mobile.config.settings import get_settings
 from hermes_mobile.plugins import get_plugin_registry
-from hermes_mobile.locales import t
+from hermes_mobile.ui.common import close_dialog, open_dialog
 
 
 class PluginsView:
@@ -44,13 +44,13 @@ class PluginsView:
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
-                    padding=ft.padding.symmetric(horizontal=20, vertical=16),
+                    padding=ft.Padding.symmetric(horizontal=20, vertical=16),
                 ),
                 ft.Divider(height=1),
                 # Plugin list
                 ft.Container(
                     content=self._build_plugin_list(),
-                    padding=ft.padding.symmetric(horizontal=20, vertical=16),
+                    padding=ft.Padding.symmetric(horizontal=20, vertical=16),
                     expand=True,
                 ),
             ],
@@ -77,7 +77,7 @@ class PluginsView:
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                         spacing=12,
                     ),
-                    alignment=ft.alignment.center,
+                    alignment=ft.Alignment.CENTER,
                     padding=40,
                 )
             ],
@@ -196,9 +196,9 @@ class PluginsView:
         dialog = ft.AlertDialog(
             title=ft.Text(f"Plugin: {manifest.name}"),
             content=ft.Container(content=content, width=400, height=400),
-            actions=[ft.TextButton("Close", on_click=lambda e: self.page.close(dialog))],
+            actions=[ft.TextButton("Close", on_click=lambda e: close_dialog(self.page, dialog))],
         )
-        self.page.open(dialog)
+        open_dialog(self.page, dialog)
 
     def _show_plugin_tools(self, manifest):
         """Show plugin tools dialog"""
@@ -234,9 +234,9 @@ class PluginsView:
         dialog = ft.AlertDialog(
             title=ft.Text(f"Tools: {manifest.name}"),
             content=ft.Container(content=content, width=500, height=400),
-            actions=[ft.TextButton("Close", on_click=lambda e: self.page.close(dialog))],
+            actions=[ft.TextButton("Close", on_click=lambda e: close_dialog(self.page, dialog))],
         )
-        self.page.open(dialog)
+        open_dialog(self.page, dialog)
 
     def _open_plugin_dir(self):
         """Open plugin directory"""

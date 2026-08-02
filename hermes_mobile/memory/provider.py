@@ -504,5 +504,13 @@ class MobileMemoryProvider:
             self._conn.close()
             self._conn = None
 
+    def clear_all(self):
+        """Delete all conversations, memory entries and skill memory."""
+        conn = self._get_conn()
+        with conn:
+            for table in ("conversations", "memory_entries", "skill_memory"):
+                conn.execute(f"DELETE FROM {table}")
+        conn.commit()
+
     def __del__(self):
         self.close()

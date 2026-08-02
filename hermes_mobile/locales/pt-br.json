@@ -12,7 +12,8 @@
     "memory": "Memoria",
     "cron": "Tarefas",
     "gateway": "Gateway",
-    "plugins": "Plugins"
+    "plugins": "Plugins",
+    "more": "Mais"
   },
   "chat": {
     "welcome": "Bem-vindo ao Hermes Mobile! Sou seu assistente IA.",
@@ -53,7 +54,8 @@
     "saved": "Configuracoes salvas",
     "light": "Claro",
     "dark": "Escuro",
-    "system": "Sistema"
+    "system": "Sistema",
+    "ai_provider_hint": "Configure seu provedor de IA e chaves de API"
   },
   "gateway": {
     "title": "Gateway",

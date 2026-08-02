@@ -1,10 +1,14 @@
 """Hermes Mobile Configuration Management"""
 
+import json
+import logging
 from pathlib import Path
 from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 def _get_default_data_dir() -> str:
@@ -123,18 +127,84 @@ Be concise but thorough. Use tools when appropriate."""
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    _PERSISTED_FIELDS = (
+        "default_provider",
+        "default_model",
+        "openrouter_api_key",
+        "openai_api_key",
+        "anthropic_api_key",
+        "gemini_api_key",
+        "max_iterations",
+        "max_tokens",
+        "temperature",
+        "memory_enabled",
+        "max_memory_entries",
+        "memory_ttl_days",
+        "skills_enabled",
+        "cron_enabled",
+        "gateway_enabled",
+        "gateway_port",
+        "push_notifications_enabled",
+        "theme",
+        "language",
+        "font_size",
+        "show_tool_calls",
+        "stream_responses",
+        "request_timeout",
+        "max_retries",
+        "encrypt_memory",
+    )
+
+    def settings_file(self) -> Path:
+        """Path to the persisted settings JSON."""
+        return self.get_config_dir() / "settings.json"
+
+    def to_dict(self) -> dict:
+        """Serializable dict of persisted fields (secrets excluded by default)."""
+        return {k: getattr(self, k) for k in self._PERSISTED_FIELDS}
+
+    def load_persisted(self) -> "HermesMobileSettings":
+        """Overlay persisted JSON values onto this instance (env still wins)."""
+        path = self.settings_file()
+        if not path.exists():
+            return self
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            for k, v in data.items():
+                if k in self._PERSISTED_FIELDS and v is not None:
+                    setattr(self, k, v)
+        except Exception as e:
+            logger.warning("Failed to load persisted settings: %s", e)
+        return self
+
+
+def save_settings(s: HermesMobileSettings) -> None:
+    """Persist runtime settings to the config dir as JSON."""
+    try:
+        path = s.settings_file()
+        path.write_text(
+            json.dumps(s.to_dict(), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        logger.warning("Failed to save settings: %s", e)
+
 
 # Global settings instance
 settings = HermesMobileSettings()
 
 
 def get_settings() -> HermesMobileSettings:
-    """Get the global settings instance"""
-    return settings
+    """Get the global settings instance (env first, then persisted JSON)."""
+    return settings.load_persisted()
 
 
 def reload_settings() -> HermesMobileSettings:
-    """Reload settings from environment"""
+    """Reload settings from environment and persisted JSON"""
     global settings
-    settings = HermesMobileSettings()
+    settings = HermesMobileSettings().load_persisted()
     return settings

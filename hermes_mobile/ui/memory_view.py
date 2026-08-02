@@ -4,7 +4,7 @@ import asyncio
 
 import flet as ft
 
-from hermes_mobile.locales import t
+from hermes_mobile.ui.theme import mode_colors
 
 
 class MemoryView:
@@ -43,18 +43,34 @@ class MemoryView:
                         ],
                         spacing=12,
                     ),
-                    padding=ft.padding.symmetric(horizontal=20, vertical=16),
+                    padding=ft.Padding.symmetric(horizontal=20, vertical=16),
                 ),
                 # Tabs for different memory types
                 ft.Tabs(
+                    length=3,
                     selected_index=0,
                     animation_duration=300,
-                    tabs=[
-                        ft.Tab(text="Conversations", icon=ft.Icons.CHAT),
-                        ft.Tab(text="Long-term Memory", icon=ft.Icons.PSYCHOLOGY),
-                        ft.Tab(text="Skill Memory", icon=ft.Icons.EXTENSION),
-                    ],
-                    on_change=self._on_tab_change,
+                    content=ft.Column(
+                        [
+                            ft.TabBar(
+                                tabs=[
+                                    ft.Tab(label="Conversations", icon=ft.Icons.CHAT),
+                                    ft.Tab(label="Long-term", icon=ft.Icons.PSYCHOLOGY),
+                                    ft.Tab(label="Skill", icon=ft.Icons.EXTENSION),
+                                ],
+                            ),
+                            ft.TabBarView(
+                                expand=True,
+                                controls=[
+                                    self._build_empty_tab("No conversations yet"),
+                                    self._build_empty_tab("No long-term memory yet"),
+                                    self._build_empty_tab("No skill memory yet"),
+                                ],
+                            ),
+                        ],
+                        expand=True,
+                        spacing=0,
+                    ),
                     expand=True,
                 ),
             ],
@@ -122,6 +138,28 @@ class MemoryView:
                 return f"{bytes_:.1f} {unit}"
             bytes_ /= 1024
         return f"{bytes_:.1f} TB"
+
+    def _build_empty_tab(self, text: str) -> ft.Control:
+        """Build an empty state for a memory tab."""
+        c = mode_colors(self.app.dark_mode)
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Icon(ft.Icons.INBOX_OUTLINED, size=40, color=c["muted_foreground"]),
+                    ft.Container(height=8),
+                    ft.Text(
+                        text,
+                        size=14,
+                        color=c["muted_foreground"],
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER,
+            ),
+            alignment=ft.Alignment.CENTER,
+            expand=True,
+        )
 
     def _on_tab_change(self, e):
         """Handle tab change"""

@@ -7,7 +7,7 @@ from hermes_mobile.gateway.mobile_gateway import (
     cli_revoke,
     get_pairing_manager,
 )
-from hermes_mobile.locales import t
+from hermes_mobile.ui.common import snack
 
 
 class GatewayView:
@@ -41,13 +41,13 @@ class GatewayView:
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
-                    padding=ft.padding.symmetric(horizontal=20, vertical=16),
+                    padding=ft.Padding.symmetric(horizontal=20, vertical=16),
                 ),
                 ft.Divider(height=1),
                 # Gateway status
                 ft.Container(
                     content=self._build_gateway_status(),
-                    padding=ft.padding.symmetric(horizontal=20, vertical=16),
+                    padding=ft.Padding.symmetric(horizontal=20, vertical=16),
                 ),
                 ft.Divider(height=1),
                 # Pairing codes
@@ -60,7 +60,7 @@ class GatewayView:
                         ],
                         spacing=12,
                     ),
-                    padding=ft.padding.symmetric(horizontal=20, vertical=16),
+                    padding=ft.Padding.symmetric(horizontal=20, vertical=16),
                     expand=True,
                 ),
             ],
@@ -154,7 +154,7 @@ class GatewayView:
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=12,
                 ),
-                alignment=ft.alignment.center,
+                alignment=ft.Alignment.CENTER,
                 padding=40,
             )
 
@@ -204,7 +204,7 @@ class GatewayView:
                                         if time_left < 300
                                         else ft.Colors.GREEN,
                                     ),
-                                    padding=ft.padding.symmetric(horizontal=12, vertical=6),
+                                    padding=ft.Padding.symmetric(horizontal=12, vertical=6),
                                     bgcolor=ft.Colors.with_opacity(
                                         0.1,
                                         ft.Colors.ORANGE if time_left < 300 else ft.Colors.GREEN,
@@ -248,26 +248,18 @@ class GatewayView:
     def _approve_code(self, code):
         """Approve a pairing code"""
         if cli_approve(code.code):
-            self.page.show_snack_bar(
-                ft.SnackBar(
-                    content=ft.Text(f"Approved code for {code.user_name} on {code.platform}")
-                )
-            )
+            snack(self.page, f"Approved code for {code.user_name} on {code.platform}")
             self._refresh()
         else:
-            self.page.show_snack_bar(ft.SnackBar(content=ft.Text("Failed to approve code")))
+            snack(self.page, "Failed to approve code", error=True)
 
     def _revoke_code(self, code):
         """Revoke a pairing code"""
         if cli_revoke(code.code):
-            self.page.show_snack_bar(
-                ft.SnackBar(
-                    content=ft.Text(f"Revoked code for {code.user_name} on {code.platform}")
-                )
-            )
+            snack(self.page, f"Revoked code for {code.user_name} on {code.platform}")
             self._refresh()
         else:
-            self.page.show_snack_bar(ft.SnackBar(content=ft.Text("Failed to revoke code")))
+            snack(self.page, "Failed to revoke code", error=True)
 
     def _toggle_gateway(self, enabled: bool):
         """Toggle gateway enabled state"""

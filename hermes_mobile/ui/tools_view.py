@@ -8,7 +8,8 @@ from hermes_mobile.toolsets import (
     get_toolset,
     list_toolsets_by_category,
 )
-from hermes_mobile.locales import t
+from hermes_mobile.ui.common import close_dialog, open_dialog, snack
+from hermes_mobile.ui.theme import mode_colors
 
 
 class ToolsView:
@@ -21,6 +22,8 @@ class ToolsView:
 
     def build(self) -> ft.Control:
         """Build the tools view"""
+        dark = self.app.dark_mode
+        c = mode_colors(dark)
         toolsets = get_all_toolsets()
         categories = list_toolsets_by_category()
 
@@ -30,7 +33,7 @@ class ToolsView:
                 ft.Container(
                     content=ft.Row(
                         [
-                            ft.Text("Tools & Toolsets", size=24, weight=ft.FontWeight.BOLD),
+                            ft.Text("Tools & Toolsets", size=22, weight=ft.FontWeight.W_700, color=c["foreground"]),
                             ft.IconButton(
                                 icon=ft.Icons.REFRESH,
                                 tooltip="Refresh",
@@ -39,9 +42,9 @@ class ToolsView:
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
-                    padding=ft.padding.symmetric(horizontal=20, vertical=16),
+                    padding=ft.Padding.symmetric(horizontal=20, vertical=14),
                 ),
-                ft.Divider(height=1),
+                ft.Container(height=1, bgcolor=c["border"]),
                 # Toolsets by category
                 ft.Container(
                     content=self._build_toolsets_list(categories),
@@ -49,6 +52,7 @@ class ToolsView:
                 ),
             ],
             expand=True,
+            spacing=0,
         )
 
     def _build_toolsets_list(self, categories: dict) -> ft.Control:
@@ -190,9 +194,9 @@ class ToolsView:
         dialog = ft.AlertDialog(
             title=ft.Text(f"Toolset: {name}"),
             content=ft.Container(content=content, width=400, height=500),
-            actions=[ft.TextButton("Close", on_click=lambda e: self.page.close(dialog))],
+            actions=[ft.TextButton("Close", on_click=lambda e: close_dialog(self.page, dialog))],
         )
-        self.page.open(dialog)
+        open_dialog(self.page, dialog)
 
     def _enable_toolset(self, name: str):
         """Enable a toolset for the agent"""
@@ -209,9 +213,7 @@ class ToolsView:
                 current_tools.append(schema)
 
         self.agent.set_tools(current_tools)
-        self.page.show_snack_bar(
-            ft.SnackBar(content=ft.Text(f"Enabled toolset: {name} ({len(resolved_tools)} tools)"))
-        )
+        snack(self.page, f"Enabled toolset: {name} ({len(resolved_tools)} tools)")
 
     def _refresh(self):
         """Refresh the view"""

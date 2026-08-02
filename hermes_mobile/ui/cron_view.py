@@ -13,7 +13,7 @@ from hermes_mobile.cron.scheduler import (
     run_job_now,
     update_job as _update_job,
 )
-from hermes_mobile.locales import t
+from hermes_mobile.ui.common import close_dialog, open_dialog, snack
 
 
 class CronView:
@@ -51,7 +51,7 @@ class CronView:
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
-                    padding=ft.padding.symmetric(horizontal=20, vertical=16),
+                    padding=ft.Padding.symmetric(horizontal=20, vertical=16),
                 ),
                 ft.Divider(height=1),
                 # Jobs list
@@ -89,7 +89,7 @@ class CronView:
                 ],
                 spacing=4,
             ),
-            padding=ft.padding.symmetric(horizontal=12, vertical=6),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=6),
             bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
             border_radius=16,
         )
@@ -115,7 +115,7 @@ class CronView:
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=16,
                 ),
-                alignment=ft.alignment.center,
+                alignment=ft.Alignment.CENTER,
                 expand=True,
             )
 
@@ -167,7 +167,7 @@ class CronView:
                                         color=status_color,
                                         weight=ft.FontWeight.BOLD,
                                     ),
-                                    padding=ft.padding.symmetric(horizontal=8, vertical=4),
+                                    padding=ft.Padding.symmetric(horizontal=8, vertical=4),
                                     bgcolor=ft.Colors.with_opacity(0.1, status_color),
                                     border_radius=12,
                                 ),
@@ -257,11 +257,11 @@ class CronView:
                     timeout=int(timeout_field.value),
                     enabled=enabled_switch.value,
                 )
-                self.page.close(dialog)
+                close_dialog(self.page, dialog)
                 self._refresh()
-                self.page.show_snack_bar(ft.SnackBar(content=ft.Text("Job created successfully")))
+                snack(self.page, "Job created successfully")
             except Exception as ex:
-                self.page.show_snack_bar(ft.SnackBar(content=ft.Text(f"Error: {ex}")))
+                snack(self.page, f"Error: {ex}")
 
         dialog = ft.AlertDialog(
             title=ft.Text("Create Cron Job"),
@@ -282,11 +282,11 @@ class CronView:
                 width=400,
             ),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda e: self.page.close(dialog)),
+                ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
                 ft.ElevatedButton("Create", on_click=handle_create),
             ],
         )
-        self.page.open(dialog)
+        open_dialog(self.page, dialog)
 
     def _show_edit_job_dialog(self, job):
         """Show edit job dialog"""
@@ -312,11 +312,11 @@ class CronView:
                     timeout=int(timeout_field.value),
                     enabled=enabled_switch.value,
                 )
-                self.page.close(dialog)
+                close_dialog(self.page, dialog)
                 self._refresh()
-                self.page.show_snack_bar(ft.SnackBar(content=ft.Text("Job updated successfully")))
+                snack(self.page, "Job updated successfully")
             except Exception as ex:
-                self.page.show_snack_bar(ft.SnackBar(content=ft.Text(f"Error: {ex}")))
+                snack(self.page, f"Error: {ex}")
 
         dialog = ft.AlertDialog(
             title=ft.Text(f"Edit Job: {job.name}"),
@@ -337,22 +337,18 @@ class CronView:
                 width=400,
             ),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda e: self.page.close(dialog)),
+                ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
                 ft.ElevatedButton("Save", on_click=handle_update),
             ],
         )
-        self.page.open(dialog)
+        open_dialog(self.page, dialog)
 
     def _run_job_now(self, job):
         """Run a job immediately"""
 
         def run_async():
             output = run_job_now(job.id)
-            self.page.show_snack_bar(
-                ft.SnackBar(
-                    content=ft.Text(f"Job completed: {output.status} ({output.duration:.1f}s)")
-                )
-            )
+            snack(self.page, f"Job completed: {output.status} ({output.duration:.1f}s)")
             self._refresh()
 
         import threading
@@ -397,7 +393,7 @@ class CronView:
                                                         else ft.Colors.RED,
                                                         weight=ft.FontWeight.BOLD,
                                                     ),
-                                                    padding=ft.padding.symmetric(
+                                                    padding=ft.Padding.symmetric(
                                                         horizontal=6, vertical=2
                                                     ),
                                                     bgcolor=ft.Colors.with_opacity(
@@ -445,18 +441,18 @@ class CronView:
         dialog = ft.AlertDialog(
             title=ft.Text(f"Job Output: {job.name}"),
             content=ft.Container(content=content, width=500, height=600),
-            actions=[ft.TextButton("Close", on_click=lambda e: self.page.close(dialog))],
+            actions=[ft.TextButton("Close", on_click=lambda e: close_dialog(self.page, dialog))],
         )
-        self.page.open(dialog)
+        open_dialog(self.page, dialog)
 
     def _confirm_delete_job(self, job):
         """Confirm job deletion"""
 
         def delete(e):
             delete_job(job.id)
-            self.page.close(dialog)
+            close_dialog(self.page, dialog)
             self._refresh()
-            self.page.show_snack_bar(ft.SnackBar(content=ft.Text("Job deleted")))
+            snack(self.page, "Job deleted")
 
         dialog = ft.AlertDialog(
             title=ft.Text("Delete Job"),
@@ -464,11 +460,11 @@ class CronView:
                 f"Are you sure you want to delete '{job.name}'? This cannot be undone."
             ),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda e: self.page.close(dialog)),
+                ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
                 ft.ElevatedButton("Delete", color=ft.Colors.ERROR, on_click=delete),
             ],
         )
-        self.page.open(dialog)
+        open_dialog(self.page, dialog)
 
     def _refresh(self):
         """Refresh the view"""

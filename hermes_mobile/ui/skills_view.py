@@ -3,7 +3,7 @@
 import flet as ft
 
 from hermes_mobile.skills.manager import MobileSkillManager
-from hermes_mobile.locales import t
+from hermes_mobile.ui.common import close_dialog, open_dialog, snack
 
 
 class SkillsView:
@@ -36,7 +36,7 @@ class SkillsView:
                         ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
-                    padding=ft.padding.symmetric(horizontal=20, vertical=16),
+                    padding=ft.Padding.symmetric(horizontal=20, vertical=16),
                 ),
                 ft.Divider(height=1),
                 # Skills list
@@ -72,7 +72,7 @@ class SkillsView:
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=16,
                 ),
-                alignment=ft.alignment.center,
+                alignment=ft.Alignment.CENTER,
                 expand=True,
             )
 
@@ -156,18 +156,18 @@ class SkillsView:
             desc = desc_field.value.strip()
             if name:
                 self.skill_manager.create_skill_template(name, desc)
-                self.page.close(dialog)
+                close_dialog(self.page, dialog)
                 self._refresh()
 
         dialog = ft.AlertDialog(
             title=ft.Text("Create New Skill"),
             content=ft.Column([name_field, desc_field], tight=True, spacing=12),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda e: self.page.close(dialog)),
+                ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
                 ft.ElevatedButton("Create", on_click=create),
             ],
         )
-        self.page.open(dialog)
+        open_dialog(self.page, dialog)
 
     def _on_install_from_url(self, e):
         """Show install from URL dialog"""
@@ -176,7 +176,7 @@ class SkillsView:
         async def install(e):
             url = url_field.value.strip()
             if url:
-                self.page.close(dialog)
+                close_dialog(self.page, dialog)
                 # Show loading
                 loading = ft.AlertDialog(
                     content=ft.Row(
@@ -184,17 +184,15 @@ class SkillsView:
                         spacing=12,
                     ),
                 )
-                self.page.open(loading)
+                open_dialog(self.page, loading)
 
                 skill = await self.skill_manager.install_skill_from_url(url)
-                self.page.close(loading)
+                close_dialog(self.page, loading)
 
                 if skill:
-                    self.page.show_snack_bar(
-                        ft.SnackBar(content=ft.Text(f"Installed: {skill.name}"))
-                    )
+                    snack(self.page, f"Installed: {skill.name}")
                 else:
-                    self.page.show_snack_bar(ft.SnackBar(content=ft.Text("Installation failed")))
+                    snack(self.page, "Installation failed")
 
                 self._refresh()
 
@@ -202,11 +200,11 @@ class SkillsView:
             title=ft.Text("Install Skill from URL"),
             content=url_field,
             actions=[
-                ft.TextButton("Cancel", on_click=lambda e: self.page.close(dialog)),
+                ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
                 ft.ElevatedButton("Install", on_click=install),
             ],
         )
-        self.page.open(dialog)
+        open_dialog(self.page, dialog)
 
     def _toggle_skill(self, skill, enabled: bool):
         """Toggle skill enabled state"""
@@ -247,21 +245,21 @@ class SkillsView:
         dialog = ft.AlertDialog(
             title=ft.Text(f"Skill: {skill.name}"),
             content=ft.Container(content=content, width=400, height=500),
-            actions=[ft.TextButton("Close", on_click=lambda e: self.page.close(dialog))],
+            actions=[ft.TextButton("Close", on_click=lambda e: close_dialog(self.page, dialog))],
         )
-        self.page.open(dialog)
+        open_dialog(self.page, dialog)
 
     def _export_skill(self, skill):
         """Export skill to downloads"""
         # TODO: Implement export
-        self.page.show_snack_bar(ft.SnackBar(content=ft.Text("Export not yet implemented")))
+        snack(self.page, "Export not yet implemented")
 
     def _confirm_remove_skill(self, skill):
         """Confirm skill removal"""
 
         def remove(e):
             self.skill_manager.remove_skill(skill.name)
-            self.page.close(dialog)
+            close_dialog(self.page, dialog)
             self._refresh()
 
         dialog = ft.AlertDialog(
@@ -270,11 +268,11 @@ class SkillsView:
                 f"Are you sure you want to remove '{skill.name}'? This cannot be undone."
             ),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda e: self.page.close(dialog)),
+                ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
                 ft.ElevatedButton("Remove", color=ft.Colors.ERROR, on_click=remove),
             ],
         )
-        self.page.open(dialog)
+        open_dialog(self.page, dialog)
 
     def _refresh(self):
         """Refresh the skills view"""
