@@ -43,6 +43,15 @@ from hermes_mobile.tools.browser_session import (
     browser_click_tool,
     browser_get_images_tool,
 )
+from hermes_mobile.tools.media_tools import (
+    image_generate_tool,
+    vision_analyze_tool,
+)
+from hermes_mobile.tools.project_tools import (
+    project_create_tool,
+    project_list_tool,
+    project_switch_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -429,6 +438,11 @@ class MobileAgent:
             "browser_back": self._tool_browser_back,
             "browser_click": self._tool_browser_click,
             "browser_get_images": self._tool_browser_get_images,
+            "vision_analyze": self._tool_vision_analyze,
+            "image_generate": self._tool_image_generate,
+            "project_list": self._tool_project_list,
+            "project_create": self._tool_project_create,
+            "project_switch": self._tool_project_switch,
             "delegate_tasks": self._tool_delegate_tasks,
         }
 
@@ -619,6 +633,30 @@ class MobileAgent:
     async def _tool_browser_get_images(self) -> Dict[str, Any]:
         """List images on the current page."""
         return await browser_get_images_tool()
+
+    async def _tool_vision_analyze(
+        self, image_url: str, question: str = "Describe this image in detail."
+    ) -> Dict[str, Any]:
+        """Analyze an image with a vision model."""
+        return await vision_analyze_tool(
+            image_url=image_url, question=question, agent=self
+        )
+
+    async def _tool_image_generate(self, prompt: str) -> Dict[str, Any]:
+        """Generate an image from a prompt."""
+        return await image_generate_tool(prompt=prompt, agent=self)
+
+    async def _tool_project_list(self) -> Dict[str, Any]:
+        """List projects and the active one."""
+        return await project_list_tool()
+
+    async def _tool_project_create(self, name: str) -> Dict[str, Any]:
+        """Create a new project."""
+        return await project_create_tool(name=name)
+
+    async def _tool_project_switch(self, name: str) -> Dict[str, Any]:
+        """Switch the active project workspace."""
+        return await project_switch_tool(name=name, agent=self)
 
     async def _tool_delegate_tasks(
         self, tasks: List[str], context: Optional[str] = None
@@ -983,6 +1021,71 @@ class MobileAgent:
                                 "job_id": {"type": "string", "description": "Job id for run/pause/resume"},
                             },
                             "required": ["action"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "vision_analyze",
+                        "description": "Analyze an image with a vision model (URL or local path)",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "image_url": {"type": "string", "description": "Image URL or local path"},
+                                "question": {"type": "string", "description": "Question about the image", "default": "Describe this image in detail."},
+                            },
+                            "required": ["image_url"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "image_generate",
+                        "description": "Generate an image from a text prompt",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "prompt": {"type": "string", "description": "Image prompt"},
+                            },
+                            "required": ["prompt"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "project_list",
+                        "description": "List projects and the active one",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "project_create",
+                        "description": "Create a new project workspace",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string", "description": "Project name"},
+                            },
+                            "required": ["name"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "project_switch",
+                        "description": "Switch the active project workspace",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string", "description": "Project name"},
+                            },
+                            "required": ["name"],
                         },
                     },
                 },
