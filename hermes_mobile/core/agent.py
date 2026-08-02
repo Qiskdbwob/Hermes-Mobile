@@ -38,6 +38,11 @@ from hermes_mobile.tools.web_tools import (
     web_extract_tool,
     web_search_tool,
 )
+from hermes_mobile.tools.browser_session import (
+    browser_back_tool,
+    browser_click_tool,
+    browser_get_images_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -421,6 +426,9 @@ class MobileAgent:
             "cronjob": self._tool_cronjob,
             "browser_navigate": self._tool_browser_navigate,
             "browser_snapshot": self._tool_browser_snapshot,
+            "browser_back": self._tool_browser_back,
+            "browser_click": self._tool_browser_click,
+            "browser_get_images": self._tool_browser_get_images,
             "delegate_tasks": self._tool_delegate_tasks,
         }
 
@@ -599,6 +607,18 @@ class MobileAgent:
     async def _tool_browser_snapshot(self, url: str) -> Dict[str, Any]:
         """Return a text snapshot of a web page."""
         return await browser_snapshot_tool(url)
+
+    async def _tool_browser_back(self) -> Dict[str, Any]:
+        """Go back to the previous page."""
+        return await browser_back_tool()
+
+    async def _tool_browser_click(self, href: str) -> Dict[str, Any]:
+        """Click a link by href."""
+        return await browser_click_tool(href)
+
+    async def _tool_browser_get_images(self) -> Dict[str, Any]:
+        """List images on the current page."""
+        return await browser_get_images_tool()
 
     async def _tool_delegate_tasks(
         self, tasks: List[str], context: Optional[str] = None
@@ -816,6 +836,36 @@ class MobileAgent:
                             },
                             "required": ["url"],
                         },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "browser_back",
+                        "description": "Go back to the previous page in the browsing session",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "browser_click",
+                        "description": "Click a link by href (relative links resolve against the current page)",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "href": {"type": "string", "description": "Link href to click"},
+                            },
+                            "required": ["href"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "browser_get_images",
+                        "description": "List images on the current page of the browsing session",
+                        "parameters": {"type": "object", "properties": {}},
                     },
                 },
                 {
