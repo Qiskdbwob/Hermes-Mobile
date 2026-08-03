@@ -70,7 +70,7 @@ class MobileProcessRegistry:
                     if timeout
                     else await communicate
                 )
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 await self._kill_process_tree(process)
                 output, _ = await process.communicate()
                 return {
@@ -139,7 +139,7 @@ class MobileProcessRegistry:
                     await waiter
                 if session.reader_task:
                     await session.reader_task
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 return {**self._describe(session), "timeout": True}
             return {
                 **self._describe(session),

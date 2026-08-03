@@ -11,6 +11,8 @@ dark surface, same flat, hairline-based chrome.
 
 from __future__ import annotations
 
+import inspect
+
 import flet as ft
 
 # --- Canonical desktop tokens (src/themes/presets.ts) ---
@@ -77,7 +79,7 @@ LIGHT = {
 
 def _scheme(c: dict) -> ft.ColorScheme:
     """Map the desktop token dict onto a Material 3 ColorScheme."""
-    return ft.ColorScheme(
+    values = dict(
         primary=c["primary"],
         on_primary=c["primary_foreground"],
         primary_container=c["accent"],
@@ -109,6 +111,8 @@ def _scheme(c: dict) -> ft.ColorScheme:
         inverse_primary=c["accent"],
         surface_tint=c["primary"],
     )
+    supported = inspect.signature(ft.ColorScheme).parameters
+    return ft.ColorScheme(**{key: value for key, value in values.items() if key in supported})
 
 
 def build_theme(dark: bool = False) -> ft.Theme:

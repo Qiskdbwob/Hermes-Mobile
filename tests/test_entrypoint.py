@@ -23,7 +23,7 @@ def test_entrypoint_passes_main_positionally(monkeypatch):
         called["main"] = main
         called["kwargs"] = kwargs
 
-    monkeypatch.setattr(ft, "run", fake_run)
+    monkeypatch.setattr(ft, "run", fake_run, raising=False)
     runpy.run_path(str(PROJECT_ROOT / "main.py"), run_name="__main__")
 
     assert callable(called["main"])
