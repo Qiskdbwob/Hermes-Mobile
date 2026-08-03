@@ -432,14 +432,45 @@ class RemoteHermesClient:
         }
         if self.profile:
             params["profile"] = self.profile
-        result = await self.request("session.resume", params)
+        result, rest_messages = await asyncio.gather(
+            self.request("session.resume", params),
+            self.get_session_messages(stored_session_id),
+            return_exceptions=True,
+        )
+        if isinstance(result, BaseException):
+            raise result
         if not isinstance(result, dict) or not result.get("session_id"):
             raise RemoteProtocolError("session.resume returned no live session id")
+        if not result.get("messages") and isinstance(rest_messages, list) and rest_messages:
+            result = {**result, "messages": rest_messages}
         self.session_id = str(result["session_id"])
         self.stored_session_id = str(
             result.get("session_key") or result.get("resumed") or stored_session_id
         )
         return result
+
+    async def get_session_messages(self, stored_session_id: str) -> list[Mapping[str, Any]]:
+        """Fetch the durable transcript using the same REST fallback as Desktop."""
+        session_id = quote(str(stored_session_id), safe="")
+        params = {"profile": self.profile} if self.profile else None
+        try:
+            response = await self._http.get(
+                self._url(f"/api/sessions/{session_id}/messages"),
+                params=params,
+                headers=self._token_headers(),
+            )
+        except httpx.HTTPError:
+            return []
+        if response.status_code >= 400:
+            return []
+        try:
+            payload = response.json()
+        except ValueError:
+            return []
+        messages = payload.get("messages") if isinstance(payload, dict) else None
+        if not isinstance(messages, list):
+            return []
+        return [item for item in messages if isinstance(item, dict)]
 
     async def submit_prompt(self, text: str) -> Mapping[str, Any]:
         if not str(text or "").strip():
@@ -462,6 +493,12 @@ class RemoteHermesClient:
         if not isinstance(result, dict) or not isinstance(result.get("sessions"), list):
             return []
         return [item for item in result["sessions"] if isinstance(item, dict)]
+
+    async def get_pet_info(self) -> Mapping[str, Any]:
+        """Return the active Remote pet using the canonical Desktop RPC."""
+        params = {"profile": self.profile} if self.profile else {}
+        result = await self.request("pet.info", params)
+        return result if isinstance(result, dict) else {"enabled": False}
 
     async def respond_approval(self, choice: str) -> Any:
         return await self.request(

@@ -55,11 +55,10 @@ class ChatView:
             multiline=True,
             min_lines=1,
             max_lines=6,
-            expand=True,
             on_submit=self._on_send,
             border=ft.InputBorder.NONE,
             filled=False,
-            text_size=15,
+            text_size=14,
             text_style=ft.TextStyle(color=c["foreground"]),
             hint_style=ft.TextStyle(color=c["muted_foreground"]),
             content_padding=ft.Padding.only(left=12, right=8, top=10, bottom=6),
@@ -100,7 +99,7 @@ class ChatView:
             context_items = [
                 ft.PopupMenuItem(
                     icon=ft.Icons.HISTORY,
-                    content="Remote sessions",
+                    content=t("sessions.title"),
                     on_click=lambda e: asyncio.create_task(self.app.show_remote_sessions()),
                 ),
                 ft.PopupMenuItem(
@@ -184,12 +183,13 @@ class ChatView:
                     ),
                 ],
                 spacing=0,
+                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
             ),
-            margin=ft.Margin.only(left=10, right=10, top=6, bottom=8),
-            padding=ft.Padding.only(left=2, right=6, top=2, bottom=5),
+            margin=ft.Margin.only(left=8, right=8, top=5, bottom=7),
+            padding=ft.Padding.only(left=2, right=5, top=1, bottom=4),
             bgcolor=c["composer"],
             border=ft.Border.all(1, c["composer_border"]),
-            border_radius=ft.BorderRadius.all(16),
+            border_radius=ft.BorderRadius.all(12),
         )
 
         return ft.Column(
@@ -485,7 +485,7 @@ class ChatView:
         self._streaming_control = ft.Text(
             "",
             selectable=True,
-            size=15,
+            size=14,
             color=c["foreground"],
         )
         self._streaming_container = ft.Container(
@@ -503,7 +503,7 @@ class ChatView:
             if self.app.dark_mode
             else ft.MarkdownCodeTheme.ATELIER_CAVE_LIGHT
         )
-        fg = ft.TextStyle(size=15, color=c["foreground"])
+        fg = ft.TextStyle(size=14, color=c["foreground"], height=1.45)
         return ft.Markdown(
             value=text,
             selectable=True,
@@ -513,27 +513,27 @@ class ChatView:
             md_style_sheet=ft.MarkdownStyleSheet(
                 p_text_style=fg,
                 strong_text_style=ft.TextStyle(
-                    size=15, weight=ft.FontWeight.W_700, color=c["foreground"]
+                    size=14, weight=ft.FontWeight.W_600, color=c["foreground"]
                 ),
-                em_text_style=ft.TextStyle(size=15, italic=True, color=c["foreground"]),
+                em_text_style=ft.TextStyle(size=14, italic=True, color=c["foreground"]),
                 h1_text_style=ft.TextStyle(
-                    size=22, weight=ft.FontWeight.W_700, color=c["foreground"]
+                    size=20, weight=ft.FontWeight.W_700, color=c["foreground"]
                 ),
                 h2_text_style=ft.TextStyle(
-                    size=19, weight=ft.FontWeight.W_700, color=c["foreground"]
+                    size=17, weight=ft.FontWeight.W_700, color=c["foreground"]
                 ),
                 h3_text_style=ft.TextStyle(
-                    size=17, weight=ft.FontWeight.W_700, color=c["foreground"]
+                    size=15, weight=ft.FontWeight.W_600, color=c["foreground"]
                 ),
                 code_text_style=ft.TextStyle(
                     size=13, font_family="monospace", color=ft.Colors.PRIMARY
                 ),
                 codeblock_padding=ft.Padding.all(10),
                 blockquote_text_style=ft.TextStyle(
-                    size=15, color=c["muted_foreground"], italic=True
+                    size=14, color=c["muted_foreground"], italic=True
                 ),
-                list_bullet_text_style=ft.TextStyle(size=15, color=c["foreground"]),
-                a_text_style=ft.TextStyle(size=15, color=ft.Colors.PRIMARY),
+                list_bullet_text_style=ft.TextStyle(size=14, color=c["foreground"]),
+                a_text_style=ft.TextStyle(size=14, color=ft.Colors.PRIMARY),
             ),
         )
 
@@ -643,7 +643,7 @@ class ChatView:
                         ft.Text(
                             message.content,
                             selectable=True,
-                            size=15,
+                            size=14,
                             color=c["foreground"],
                         ),
                         ft.Row(
@@ -659,8 +659,8 @@ class ChatView:
                     ],
                     spacing=3,
                 ),
-                padding=ft.Padding.symmetric(horizontal=14, vertical=10),
-                border_radius=ft.BorderRadius.all(14),
+                padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+                border_radius=ft.BorderRadius.all(10),
                 bgcolor=c["user_bubble"],
                 border=ft.Border.all(1, c["user_bubble_border"]),
                 margin=ft.Margin.only(left=48, right=0),
@@ -679,8 +679,21 @@ class ChatView:
     # Utilities
     # ------------------------------------------------------------------
 
-    def _scroll_to_bottom(self):
+    def _scroll_to_bottom(self, delay: float = 0):
         """Scroll chat to bottom"""
+        if delay > 0:
+
+            async def scroll_after_layout():
+                await asyncio.sleep(delay)
+                result = self.chat_list.scroll_to(offset=-1, duration=0)
+                if inspect.isawaitable(result):
+                    await result
+
+            try:
+                asyncio.get_running_loop().create_task(scroll_after_layout())
+            except RuntimeError:
+                pass
+            return
         try:
             result = self.chat_list.scroll_to(offset=-1, duration=120)
             if inspect.isawaitable(result):
@@ -707,8 +720,11 @@ class ChatView:
             self._add_message_bubble(message)
         if not self.messages:
             self._show_welcome()
-        self._scroll_to_bottom()
         self.page.update()
+        # Markdown controls report their final height only after the first
+        # layout. Scrolling before that can land beyond the measured transcript
+        # and show an apparently empty resumed session until the user swipes.
+        self._scroll_to_bottom(delay=0.12)
 
     def clear_chat(self, show_welcome: bool = True):
         """Start a clean session in both the UI and agent runtime."""

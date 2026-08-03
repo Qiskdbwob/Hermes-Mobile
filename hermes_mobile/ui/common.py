@@ -14,7 +14,9 @@ import flet as ft
 
 from hermes_mobile.ui.theme import mode_colors
 
-MONO_FONT = '"Courier Prime", "Cascadia Code", "SF Mono", monospace'
+# Flutter accepts one family name, not a CSS fallback stack. ``monospace`` is
+# the native Android alias and preserves stable metrics for metadata.
+MONO_FONT = "monospace"
 
 
 def snack(page: ft.Page, text: str, error: bool = False):

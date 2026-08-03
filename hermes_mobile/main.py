@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import os
-from datetime import datetime
+from typing import cast
 
 import flet as ft
 
@@ -23,12 +23,13 @@ from hermes_mobile.remote import RemoteEvent, RemoteHermesClient, RemoteSecretSt
 from hermes_mobile.skills.manager import MobileSkillManager
 from hermes_mobile.ui.artifacts_view import ArtifactsView
 from hermes_mobile.ui.chat_view import ChatView
-from hermes_mobile.ui.common import brand_mark, close_dialog, open_dialog, snack, status_dot
+from hermes_mobile.ui.common import brand_mark, snack, status_dot
 from hermes_mobile.ui.cron_view import CronView
 from hermes_mobile.ui.gateway_view import GatewayView
 from hermes_mobile.ui.kanban_view import KanbanView
 from hermes_mobile.ui.memory_view import MemoryView
 from hermes_mobile.ui.plugins_view import PluginsView
+from hermes_mobile.ui.sessions_view import SessionsView
 from hermes_mobile.ui.settings_view import SettingsView
 from hermes_mobile.ui.skills_view import SkillsView
 from hermes_mobile.ui.terminal_view import TerminalView
@@ -46,6 +47,7 @@ class HermesMobileApp:
     MOBILE_VIEWS = ["chat", "skills", "messaging", "artifacts"]
     DESKTOP_VIEWS = [
         "chat",
+        "sessions",
         "skills",
         "messaging",
         "artifacts",
@@ -72,7 +74,9 @@ class HermesMobileApp:
         self.remote_client: RemoteHermesClient | None = None
         self.remote_status = None
         self.remote_model = ""
+        self.current_session_title = t("chat.new_session")
         self.remote_secret_store: RemoteSecretStore | None = None
+        self._remote_connect_lock = asyncio.Lock()
         self._remote_tool_calls: dict[str, ToolCall] = {}
         self._active_local_turn: asyncio.Task | None = None
 
@@ -88,6 +92,7 @@ class HermesMobileApp:
         self.artifacts_view: ArtifactsView = None
         self.terminal_view: TerminalView = None
         self.kanban_view: KanbanView = None
+        self.sessions_view: SessionsView = cast(SessionsView, None)
 
         # Navigation
         self.current_view = "chat"
@@ -237,6 +242,7 @@ class HermesMobileApp:
         self.artifacts_view = ArtifactsView(self)
         self.terminal_view = TerminalView(self)
         self.kanban_view = KanbanView(self)
+        self.sessions_view = SessionsView(self)
 
         # Ensure default cron jobs exist
         ensure_default_jobs()
@@ -383,17 +389,19 @@ class HermesMobileApp:
             tooltip=t("chat.new_session"),
             on_click=self._start_new_session,
         )
+        self._sessions_button = ft.IconButton(
+            icon=ft.Icons.FORUM_OUTLINED,
+            icon_size=18,
+            icon_color=c["muted_foreground"],
+            tooltip=t("sessions.title"),
+            on_click=lambda e: asyncio.create_task(self.show_remote_sessions()),
+        )
 
         overflow_menu = ft.PopupMenuButton(
             icon=ft.Icons.MORE_HORIZ,
             icon_color=c["muted_foreground"],
             tooltip=t("nav.more"),
             items=[
-                ft.PopupMenuItem(
-                    icon=ft.Icons.HISTORY,
-                    content="Remote sessions",
-                    on_click=lambda e: asyncio.create_task(self.show_remote_sessions()),
-                ),
                 ft.PopupMenuItem(
                     icon=ft.Icons.BUILD_OUTLINED,
                     content=t("nav.tools"),
@@ -448,10 +456,15 @@ class HermesMobileApp:
             overflow=ft.TextOverflow.ELLIPSIS,
         )
 
+        self._app_bar_leading = ft.Container(
+            content=brand_mark(30),
+            width=42,
+            alignment=ft.Alignment.CENTER_LEFT,
+        )
         return ft.Container(
             content=ft.Row(
                 [
-                    brand_mark(30),
+                    self._app_bar_leading,
                     ft.Container(width=2),
                     ft.Column(
                         [self._app_bar_title, self._app_bar_subtitle],
@@ -460,6 +473,7 @@ class HermesMobileApp:
                         expand=True,
                     ),
                     self._gateway_indicator,
+                    self._sessions_button,
                     self._new_session_button,
                     overflow_menu,
                 ],
@@ -548,6 +562,7 @@ class HermesMobileApp:
         """Build only the requested surface and preserve every other view's state."""
         builders = {
             "chat": self.chat_view.build,
+            "sessions": self.sessions_view.build,
             "tools": self.tools_view.build,
             "memory": self.memory_view.build,
             "skills": self.skills_view.build,
@@ -583,7 +598,7 @@ class HermesMobileApp:
         if view == "chat":
             self._app_bar_title.visible = True
             self._app_bar_subtitle.visible = True
-            self._app_bar_title.value = t("chat.new_session")
+            self._app_bar_title.value = self.current_session_title
             if self.remote_mode:
                 state = self.remote_client.state if self.remote_client else "offline"
                 version = getattr(self.remote_status, "version", "")
@@ -595,16 +610,33 @@ class HermesMobileApp:
                 model = getattr(self.settings, "default_model", "")
                 short_model = model.split("/")[-1] if model else t("chat.model_not_configured")
                 self._app_bar_subtitle.value = f"{provider} · {short_model}"
+        elif view == "sessions":
+            self._app_bar_title.visible = True
+            self._app_bar_subtitle.visible = True
+            self._app_bar_title.value = t("sessions.title")
+            self._app_bar_subtitle.value = t("sessions.subtitle")
         else:
             # Operational pages own their visible heading and actions. Keeping a
             # second title in the shell wastes scarce phone height and reads as
             # an accidental duplicate.
             self._app_bar_title.visible = False
             self._app_bar_subtitle.visible = False
-        self._new_session_button.visible = view == "chat"
+        if view == "sessions":
+            self._app_bar_leading.content = ft.IconButton(
+                icon=ft.Icons.ARROW_BACK,
+                icon_size=19,
+                icon_color=mode_colors(self.dark_mode)["foreground"],
+                tooltip=t("common.back"),
+                on_click=lambda e: self._navigate_to("chat"),
+                padding=0,
+            )
+        else:
+            self._app_bar_leading.content = brand_mark(30)
+        self._new_session_button.visible = view in {"chat", "sessions"}
+        self._sessions_button.visible = view != "sessions"
 
     async def show_remote_sessions(self):
-        """Show and resume human-facing sessions from the remote state database."""
+        """Open the full-height, source-aware Remote session browser."""
         if not self.remote_mode:
             snack(self.page, "Select Remote runtime in Connections first", error=True)
             self._navigate_to("gateway")
@@ -615,83 +647,11 @@ class HermesMobileApp:
         client = self.remote_client
         if client is None:
             return
-        try:
-            sessions = await client.list_sessions(limit=50)
-        except Exception as exc:
-            snack(self.page, str(exc), error=True)
-            return
+        self._navigate_to("sessions")
+        await self.sessions_view.refresh()
 
-        c = mode_colors(self.dark_mode)
-        dialog = ft.AlertDialog(modal=True)
-        rows: list[ft.Control] = []
-        for item in sessions:
-            session_id = str(item.get("id") or "")
-            if not session_id:
-                continue
-            title = str(item.get("title") or "Untitled session")
-            preview = str(item.get("preview") or "").replace("\n", " ")
-            started = item.get("started_at") or 0
-            try:
-                stamp = datetime.fromtimestamp(float(started)).strftime("%b %d · %H:%M")
-            except (TypeError, ValueError, OSError):
-                stamp = ""
-            rows.append(
-                ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.Icon(ft.Icons.CHAT_BUBBLE_OUTLINE, size=18),
-                            ft.Column(
-                                [
-                                    ft.Text(
-                                        title,
-                                        size=14,
-                                        weight=ft.FontWeight.W_600,
-                                        max_lines=1,
-                                        overflow=ft.TextOverflow.ELLIPSIS,
-                                    ),
-                                    ft.Text(
-                                        preview or stamp,
-                                        size=11,
-                                        color=c["muted_foreground"],
-                                        max_lines=1,
-                                        overflow=ft.TextOverflow.ELLIPSIS,
-                                    ),
-                                ],
-                                spacing=1,
-                                expand=True,
-                            ),
-                            ft.Text(stamp, size=10, color=c["muted_foreground"]),
-                        ],
-                        spacing=10,
-                    ),
-                    padding=ft.Padding.symmetric(horizontal=4, vertical=10),
-                    border=ft.Border.only(bottom=ft.BorderSide(1, c["border"])),
-                    on_click=lambda e, sid=session_id, name=title: asyncio.create_task(
-                        self._resume_remote_session(sid, name, dialog)
-                    ),
-                    ink=True,
-                )
-            )
-        if not rows:
-            rows = [
-                ft.Container(
-                    content=ft.Text("No remote sessions yet", color=c["muted_foreground"]),
-                    padding=ft.Padding.all(20),
-                    alignment=ft.Alignment.CENTER,
-                )
-            ]
-        dialog.title = ft.Text("Remote sessions")
-        dialog.content = ft.Container(
-            content=ft.ListView(controls=rows, spacing=0),
-            width=480,
-            height=min(540, max(180, len(rows) * 62)),
-        )
-        dialog.actions = [
-            ft.TextButton("Close", on_click=lambda e: close_dialog(self.page, dialog))
-        ]
-        open_dialog(self.page, dialog)
-
-    async def _resume_remote_session(self, session_id: str, title: str, dialog):
+    async def resume_remote_session(self, session_id: str, title: str):
+        """Resume a selected stored session and return to the transcript."""
         client = self.remote_client
         if client is None:
             return
@@ -701,15 +661,25 @@ class HermesMobileApp:
             snack(self.page, str(exc), error=True)
             return
         self.chat_view.load_remote_history(result.get("messages") or [])
+        self.current_session_title = title
         self._navigate_to("chat")
         self._app_bar_title.value = title
-        close_dialog(self.page, dialog)
         self.page.update()
 
     async def connect_remote(self, announce: bool = False):
+        """Serialize Remote connection attempts across startup and lifecycle hooks."""
+        async with self._remote_connect_lock:
+            return await self._connect_remote_locked(announce)
+
+    async def _connect_remote_locked(self, announce: bool = False):
         """Connect chat to the configured Hermes remote backend."""
         if not self.settings or not self.remote_secret_store:
             return False
+        if self.remote_client is not None and self.remote_client.state == "open":
+            if announce:
+                version = getattr(self.remote_status, "version", "") or "unknown version"
+                snack(self.page, f"Connected to Hermes {version}")
+            return True
         remote_url = str(getattr(self.settings, "remote_url", "") or "").strip()
         if not remote_url:
             if announce:
@@ -848,6 +818,7 @@ class HermesMobileApp:
             self.remote_model = model
             title = str(payload.get("title") or "")
             if title and hasattr(self, "_app_bar_title"):
+                self.current_session_title = title
                 self._app_bar_title.value = title
             if model and hasattr(self, "_app_bar_subtitle"):
                 self._app_bar_subtitle.value = f"Remote · {model.split('/')[-1]}"
@@ -869,6 +840,7 @@ class HermesMobileApp:
             self.remote_client.session_id = None
             self.remote_client.stored_session_id = None
         self._remote_tool_calls.clear()
+        self.current_session_title = t("chat.new_session")
         self._navigate_to("chat")
         self._app_bar_title.value = t("chat.new_session")
         self.page.update()

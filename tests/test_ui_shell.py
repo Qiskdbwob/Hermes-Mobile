@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any, cast
 
 import flet as ft
+import pytest
 
 from hermes_mobile.core.agent import Message
 from hermes_mobile.main import HermesMobileApp
@@ -236,6 +238,7 @@ def test_switch_view_builds_only_requested_surface():
         return SimpleNamespace(build=lambda: calls.append(name) or ft.Text(name))
 
     app.chat_view = view("chat")
+    app.sessions_view = view("sessions")
     app.tools_view = view("tools")
     app.memory_view = view("memory")
     app.skills_view = view("skills")
@@ -301,3 +304,26 @@ def test_resize_crossing_breakpoint_rebuilds_shell_and_preserves_view():
     assert switched == ["tools"]
     assert app.page.clean_calls == 1
     assert app.page.updates == 1
+
+
+@pytest.mark.asyncio
+async def test_remote_connect_attempts_are_serialized():
+    app = cast(Any, HermesMobileApp.__new__(HermesMobileApp))
+    app._remote_connect_lock = asyncio.Lock()
+    active = 0
+    max_active = 0
+
+    async def connect_locked(announce=False):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return announce
+
+    app._connect_remote_locked = connect_locked
+
+    results = await asyncio.gather(app.connect_remote(False), app.connect_remote(True))
+
+    assert results == [False, True]
+    assert max_active == 1

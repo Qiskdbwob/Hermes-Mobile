@@ -114,11 +114,11 @@ def _scheme(c: dict) -> ft.ColorScheme:
 def build_theme(dark: bool = False) -> ft.Theme:
     """Build a Flet Theme for the requested color mode."""
     c = DARK if dark else LIGHT
-    # Desktop typography stack (apps/desktop presets.ts SYSTEM_SANS)
-    font_family = (
-        '"Segoe UI", -apple-system, BlinkMacSystemFont, "SF Pro Text", '
-        '"SF Pro Display", system-ui, sans-serif'
-    )
+    # Flet/Flutter does not parse CSS fallback stacks. Android's native system
+    # UI face (Roboto) is the platform-equivalent of Desktop's Segoe/SF stack.
+    # Passing the old comma-separated CSS literal made Flutter look for one
+    # impossible family name and silently fall back with inconsistent metrics.
+    font_family = "Roboto"
     return ft.Theme(
         color_scheme=_scheme(c),
         use_material3=True,
@@ -160,11 +160,11 @@ def build_theme(dark: bool = False) -> ft.Theme:
             content_text_style=ft.TextStyle(color=c["foreground"]),
         ),
         text_theme=ft.TextTheme(
-            body_medium=ft.TextStyle(color=c["foreground"]),
-            body_large=ft.TextStyle(color=c["foreground"]),
-            title_medium=ft.TextStyle(color=c["foreground"], weight=ft.FontWeight.W_600),
-            title_large=ft.TextStyle(color=c["foreground"], weight=ft.FontWeight.W_700),
-            label_medium=ft.TextStyle(color=c["muted_foreground"]),
+            body_medium=ft.TextStyle(color=c["foreground"], size=13, height=1.45),
+            body_large=ft.TextStyle(color=c["foreground"], size=14, height=1.45),
+            title_medium=ft.TextStyle(color=c["foreground"], size=13, weight=ft.FontWeight.W_600),
+            title_large=ft.TextStyle(color=c["foreground"], size=18, weight=ft.FontWeight.W_700),
+            label_medium=ft.TextStyle(color=c["muted_foreground"], size=11),
         ),
         list_tile_theme=ft.ListTileTheme(
             text_color=c["foreground"],
