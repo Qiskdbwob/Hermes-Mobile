@@ -11,9 +11,20 @@ from hermes_mobile.cron.scheduler import (
     get_ticker_status,
     list_jobs,
     run_job_now,
+)
+from hermes_mobile.cron.scheduler import (
     update_job as _update_job,
 )
-from hermes_mobile.ui.common import close_dialog, open_dialog, snack
+from hermes_mobile.ui.common import (
+    close_dialog,
+    empty_state,
+    flat_button,
+    flat_list_row,
+    open_dialog,
+    page_header,
+    snack,
+)
+from hermes_mobile.ui.theme import mode_colors
 
 
 class CronView:
@@ -25,42 +36,35 @@ class CronView:
 
     def build(self) -> ft.Control:
         """Build the cron view"""
-        return ft.Column(
+        status = get_ticker_status()
+        running = status.get("running", False)
+        actions = ft.Row(
             [
-                # Header with ticker status
-                ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.Text("Cron Jobs", size=24, weight=ft.FontWeight.BOLD),
-                            ft.Row(
-                                [
-                                    self._build_ticker_status(),
-                                    ft.IconButton(
-                                        icon=ft.Icons.REFRESH,
-                                        tooltip="Refresh",
-                                        on_click=lambda e: self._refresh(),
-                                    ),
-                                    ft.IconButton(
-                                        icon=ft.Icons.ADD,
-                                        tooltip="Add Job",
-                                        on_click=lambda e: self._show_add_job_dialog(),
-                                    ),
-                                ],
-                                spacing=8,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    padding=ft.Padding.symmetric(horizontal=20, vertical=16),
+                ft.IconButton(
+                    icon=ft.Icons.REFRESH,
+                    tooltip="Refresh",
+                    on_click=lambda e: self._refresh(),
                 ),
-                ft.Divider(height=1),
-                # Jobs list
-                ft.Container(
-                    content=self._build_jobs_list(),
-                    expand=True,
+                ft.IconButton(
+                    icon=ft.Icons.ADD,
+                    tooltip="Add Job",
+                    on_click=lambda e: self._show_add_job_dialog(),
                 ),
             ],
+            spacing=0,
+        )
+        return ft.Column(
+            [
+                page_header(
+                    self.app.dark_mode,
+                    "Cron Jobs",
+                    f"{'Running' if running else 'Stopped'} · every {status.get('interval', 60)}s",
+                    actions,
+                ),
+                ft.Container(content=self._build_jobs_list(), expand=True),
+            ],
             expand=True,
+            spacing=0,
         )
 
     def _build_ticker_status(self) -> ft.Control:
@@ -99,136 +103,83 @@ class CronView:
         jobs = list_jobs()
 
         if not jobs:
-            return ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Icon(ft.Icons.SCHEDULE, size=64, color=ft.Colors.OUTLINE),
-                        ft.Text("No cron jobs", size=18, color=ft.Colors.OUTLINE),
-                        ft.Text("Create a job to get started", color=ft.Colors.OUTLINE),
-                        ft.ElevatedButton(
-                            "Create Job",
-                            icon=ft.Icons.ADD,
-                            on_click=lambda e: self._show_add_job_dialog(),
-                        ),
-                    ],
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=16,
+            return empty_state(
+                self.app.dark_mode,
+                "No cron jobs",
+                "Create a scheduled job to get started.",
+                ft.Icons.SCHEDULE,
+                flat_button(
+                    "Create Job",
+                    ft.Icons.ADD,
+                    lambda e: self._show_add_job_dialog(),
+                    self.app.dark_mode,
+                    primary=True,
                 ),
-                alignment=ft.Alignment.CENTER,
-                expand=True,
             )
 
         return ft.ListView(
             controls=[self._build_job_card(job) for job in jobs],
-            padding=20,
-            spacing=12,
+            padding=ft.Padding.symmetric(horizontal=12),
+            spacing=0,
         )
 
     def _build_job_card(self, job) -> ft.Control:
-        """Build a job card"""
+        """Build a dense, mobile-safe job row."""
+        c = mode_colors(self.app.dark_mode)
         status_colors = {
-            "success": ft.Colors.GREEN,
-            "failed": ft.Colors.RED,
+            "success": c["success"],
+            "failed": ft.Colors.ERROR,
             "running": ft.Colors.ORANGE,
-            None: ft.Colors.OUTLINE,
+            None: c["muted_foreground"],
         }
-
-        status_color = status_colors.get(job.last_status, ft.Colors.OUTLINE)
-
-        return ft.Card(
-            content=ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Row(
-                            [
-                                ft.Icon(
-                                    ft.Icons.SCHEDULE,
-                                    color=ft.Colors.PRIMARY if job.enabled else ft.Colors.OUTLINE,
-                                ),
-                                ft.Column(
-                                    [
-                                        ft.Text(job.name, weight=ft.FontWeight.BOLD, size=16),
-                                        ft.Text(
-                                            f"Schedule: {job.schedule} | {job.description}",
-                                            size=12,
-                                            color=ft.Colors.OUTLINE,
-                                            max_lines=2,
-                                            overflow=ft.TextOverflow.ELLIPSIS,
-                                        ),
-                                    ],
-                                    spacing=2,
-                                    expand=True,
-                                ),
-                                ft.Container(
-                                    content=ft.Text(
-                                        job.last_status.upper() if job.last_status else "NEVER RUN",
-                                        size=11,
-                                        color=status_color,
-                                        weight=ft.FontWeight.BOLD,
-                                    ),
-                                    padding=ft.Padding.symmetric(horizontal=8, vertical=4),
-                                    bgcolor=ft.Colors.with_opacity(0.1, status_color),
-                                    border_radius=12,
-                                ),
-                            ],
-                            spacing=12,
-                        ),
-                        ft.Divider(height=1),
-                        ft.Row(
-                            [
-                                ft.Text(
-                                    f"Runs: {job.run_count} | Failures: {job.failure_count}",
-                                    size=11,
-                                    color=ft.Colors.OUTLINE,
-                                ),
-                                ft.Text(
-                                    f"Next: {job.next_run[:16] if job.next_run else 'N/A'}",
-                                    size=11,
-                                    color=ft.Colors.OUTLINE,
-                                ),
-                            ],
-                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        ),
-                        ft.Divider(height=1),
-                        ft.Row(
-                            [
-                                ft.TextButton(
-                                    "Run Now",
-                                    icon=ft.Icons.PLAY_ARROW,
-                                    on_click=lambda e, j=job: self._run_job_now(j),
-                                ),
-                                ft.TextButton(
-                                    "Disable" if job.enabled else "Enable",
-                                    icon=ft.Icons.PAUSE_CIRCLE
-                                    if job.enabled
-                                    else ft.Icons.PLAY_CIRCLE,
-                                    on_click=lambda e, j=job: self._toggle_job(j),
-                                ),
-                                ft.TextButton(
-                                    "Output",
-                                    icon=ft.Icons.VISIBILITY,
-                                    on_click=lambda e, j=job: self._show_job_output(j),
-                                ),
-                                ft.TextButton(
-                                    "Edit",
-                                    icon=ft.Icons.EDIT,
-                                    on_click=lambda e, j=job: self._show_edit_job_dialog(j),
-                                ),
-                                ft.TextButton(
-                                    "Delete",
-                                    icon=ft.Icons.DELETE,
-                                    style=ft.ButtonStyle(color=ft.Colors.ERROR),
-                                    on_click=lambda e, j=job: self._confirm_delete_job(j),
-                                ),
-                            ],
-                            alignment=ft.MainAxisAlignment.END,
-                        ),
-                    ],
-                    spacing=8,
+        status_color = status_colors.get(job.last_status, c["muted_foreground"])
+        status_label = job.last_status.upper() if job.last_status else "NEVER RUN"
+        next_run = job.next_run[:16] if job.next_run else "N/A"
+        subtitle = (
+            f"{job.schedule} · {job.description}\n"
+            f"Runs {job.run_count} · Failures {job.failure_count} · Next {next_run}"
+        )
+        menu = ft.PopupMenuButton(
+            icon=ft.Icons.MORE_VERT,
+            tooltip="Job actions",
+            items=[
+                ft.PopupMenuItem(
+                    content=ft.Text("Run now"),
+                    on_click=lambda e, j=job: self._run_job_now(j),
                 ),
-                padding=16,
+                ft.PopupMenuItem(
+                    content=ft.Text("Disable" if job.enabled else "Enable"),
+                    on_click=lambda e, j=job: self._toggle_job(j),
+                ),
+                ft.PopupMenuItem(
+                    content=ft.Text("View output"),
+                    on_click=lambda e, j=job: self._show_job_output(j),
+                ),
+                ft.PopupMenuItem(
+                    content=ft.Text("Edit"),
+                    on_click=lambda e, j=job: self._show_edit_job_dialog(j),
+                ),
+                ft.PopupMenuItem(
+                    content=ft.Text("Delete"),
+                    on_click=lambda e, j=job: self._confirm_delete_job(j),
+                ),
+            ],
+        )
+        trailing = ft.Row(
+            [ft.Text(status_label, size=10, color=status_color), menu],
+            spacing=0,
+            tight=True,
+        )
+        return flat_list_row(
+            self.app.dark_mode,
+            job.name,
+            subtitle,
+            ft.Icon(
+                ft.Icons.SCHEDULE,
+                size=18,
+                color=ft.Colors.PRIMARY if job.enabled else c["muted_foreground"],
             ),
+            trailing,
         )
 
     def _show_add_job_dialog(self):

@@ -2,8 +2,18 @@
 
 import flet as ft
 
+from hermes_mobile.locales import t
 from hermes_mobile.skills.manager import MobileSkillManager
-from hermes_mobile.ui.common import close_dialog, open_dialog, snack
+from hermes_mobile.ui.common import (
+    close_dialog,
+    empty_state,
+    flat_button,
+    flat_list_row,
+    open_dialog,
+    page_header,
+    snack,
+)
+from hermes_mobile.ui.theme import mode_colors
 
 
 class SkillsView:
@@ -16,36 +26,30 @@ class SkillsView:
 
     def build(self) -> ft.Control:
         """Build the skills view"""
-        return ft.Column(
+        dark = self.app.dark_mode
+        actions = ft.Row(
             [
-                # Header
-                ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.Text("Skills", size=24, weight=ft.FontWeight.BOLD),
-                            ft.IconButton(
-                                icon=ft.Icons.ADD,
-                                tooltip="Create New Skill",
-                                on_click=self._on_create_skill,
-                            ),
-                            ft.IconButton(
-                                icon=ft.Icons.CLOUD_DOWNLOAD,
-                                tooltip="Install from URL",
-                                on_click=self._on_install_from_url,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    padding=ft.Padding.symmetric(horizontal=20, vertical=16),
+                ft.IconButton(
+                    icon=ft.Icons.ADD,
+                    tooltip=t("skills.create_skill"),
+                    on_click=self._on_create_skill,
                 ),
-                ft.Divider(height=1),
-                # Skills list
-                ft.Container(
-                    content=self._build_skills_list(),
-                    expand=True,
+                ft.IconButton(
+                    icon=ft.Icons.CLOUD_DOWNLOAD_OUTLINED,
+                    tooltip=t("skills.install_from_url"),
+                    on_click=self._on_install_from_url,
                 ),
             ],
+            spacing=0,
+            tight=True,
+        )
+        return ft.Column(
+            [
+                page_header(dark, t("skills.title"), t("skills.installed"), actions),
+                self._build_skills_list(),
+            ],
             expand=True,
+            spacing=0,
         )
 
     def _build_skills_list(self) -> ft.Control:
@@ -53,97 +57,72 @@ class SkillsView:
         skills = self.skill_manager.get_all_skills()
 
         if not skills:
-            return ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Icon(ft.Icons.EXTENSION_OFF, size=64, color=ft.Colors.OUTLINE),
-                        ft.Text("No skills installed", size=18, color=ft.Colors.OUTLINE),
-                        ft.Text(
-                            "Create a new skill or install from a URL",
-                            color=ft.Colors.OUTLINE,
-                        ),
-                        ft.ElevatedButton(
-                            "Create Skill",
-                            icon=ft.Icons.ADD,
-                            on_click=self._on_create_skill,
-                        ),
-                    ],
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=16,
+            return empty_state(
+                self.app.dark_mode,
+                t("skills.no_skills"),
+                t("skills.no_skills_hint"),
+                ft.Icons.EXTENSION_OFF_OUTLINED,
+                flat_button(
+                    t("skills.create_skill"),
+                    ft.Icons.ADD,
+                    self._on_create_skill,
+                    primary=True,
+                    dark=self.app.dark_mode,
                 ),
-                alignment=ft.Alignment.CENTER,
-                expand=True,
             )
 
         return ft.ListView(
             controls=[self._build_skill_card(skill) for skill in skills],
-            padding=20,
-            spacing=12,
+            padding=ft.Padding.symmetric(horizontal=16),
+            spacing=0,
+            expand=True,
         )
 
     def _build_skill_card(self, skill) -> ft.Control:
         """Build a skill card"""
-        return ft.Card(
-            content=ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Row(
-                            [
-                                ft.Icon(
-                                    ft.Icons.EXTENSION,
-                                    color=ft.Colors.PRIMARY if skill.enabled else ft.Colors.OUTLINE,
-                                ),
-                                ft.Column(
-                                    [
-                                        ft.Text(skill.name, weight=ft.FontWeight.BOLD, size=16),
-                                        ft.Text(
-                                            skill.description or "No description",
-                                            size=12,
-                                            color=ft.Colors.OUTLINE,
-                                            max_lines=2,
-                                            overflow=ft.TextOverflow.ELLIPSIS,
-                                        ),
-                                    ],
-                                    spacing=2,
-                                    expand=True,
-                                ),
-                                ft.Switch(
-                                    value=skill.enabled,
-                                    on_change=lambda e, s=skill: self._toggle_skill(
-                                        s, e.control.value
-                                    ),
-                                ),
-                            ],
-                            spacing=12,
+        c = mode_colors(self.app.dark_mode)
+        actions = ft.Row(
+            [
+                ft.Switch(
+                    value=skill.enabled,
+                    on_change=lambda e, s=skill: self._toggle_skill(s, e.control.value),
+                ),
+                ft.PopupMenuButton(
+                    icon=ft.Icons.MORE_VERT,
+                    icon_color=c["muted_foreground"],
+                    items=[
+                        ft.PopupMenuItem(
+                            icon=ft.Icons.INFO_OUTLINE,
+                            content=t("skills.details"),
+                            on_click=lambda e, s=skill: self._show_skill_details(s),
                         ),
-                        ft.Divider(height=1),
-                        ft.Row(
-                            [
-                                ft.TextButton(
-                                    "Details",
-                                    icon=ft.Icons.INFO_OUTLINE,
-                                    on_click=lambda e, s=skill: self._show_skill_details(s),
-                                ),
-                                ft.TextButton(
-                                    "Export",
-                                    icon=ft.Icons.DOWNLOAD,
-                                    on_click=lambda e, s=skill: self._export_skill(s),
-                                ),
-                                ft.TextButton(
-                                    "Remove",
-                                    icon=ft.Icons.DELETE_OUTLINE,
-                                    style=ft.ButtonStyle(color=ft.Colors.ERROR),
-                                    on_click=lambda e, s=skill: self._confirm_remove_skill(s),
-                                ),
-                            ],
-                            alignment=ft.MainAxisAlignment.END,
+                        ft.PopupMenuItem(
+                            icon=ft.Icons.DOWNLOAD_OUTLINED,
+                            content="Export",
+                            on_click=lambda e, s=skill: self._export_skill(s),
+                        ),
+                        ft.PopupMenuItem(
+                            icon=ft.Icons.DELETE_OUTLINE,
+                            content=t("skills.remove"),
+                            on_click=lambda e, s=skill: self._confirm_remove_skill(s),
                         ),
                     ],
-                    spacing=8,
                 ),
-                padding=16,
+            ],
+            spacing=0,
+            tight=True,
+        )
+        return flat_list_row(
+            self.app.dark_mode,
+            skill.name,
+            skill.description or t("skills.no_description"),
+            ft.Icon(
+                ft.Icons.EXTENSION_OUTLINED,
+                size=19,
+                color=c["primary"] if skill.enabled else c["muted_foreground"],
             ),
+            actions,
+            lambda e, s=skill: self._show_skill_details(s),
         )
 
     def _on_create_skill(self, e):

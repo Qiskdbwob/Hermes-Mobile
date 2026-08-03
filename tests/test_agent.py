@@ -1,14 +1,14 @@
 """Tests for the agent core (Message, ToolCall, MobileAgent construction)."""
 
-import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from hermes_mobile.core.agent import Message, MobileAgent, ToolCall, create_mobile_agent
 from hermes_mobile.core.context_compressor import compress_messages, needs_compression
-from hermes_mobile.core.prompt_caching import supports_caching, apply_cache_control
+from hermes_mobile.core.prompt_caching import apply_cache_control, supports_caching
 
 
 class TestMessage:
@@ -190,6 +190,85 @@ class TestMobileAgent:
         assert len(received) == 1
         assert received[0].content == "Test"
 
+    @pytest.mark.asyncio
+    async def test_streaming_reassembles_and_executes_fragmented_tool_calls(self):
+        def chunk(content=None, tool_calls=None):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content=content, tool_calls=tool_calls or [])
+                    )
+                ]
+            )
+
+        def tool_delta(index, *, call_id=None, name=None, arguments=None):
+            return SimpleNamespace(
+                index=index,
+                id=call_id,
+                function=SimpleNamespace(name=name, arguments=arguments),
+            )
+
+        async def first_response():
+            yield chunk(
+                tool_calls=[
+                    tool_delta(
+                        0,
+                        call_id="call_stream",
+                        name="web_",
+                        arguments='{"query":"py',
+                    )
+                ]
+            )
+            yield chunk(
+                tool_calls=[
+                    tool_delta(0, name="search", arguments='thon"}')
+                ]
+            )
+
+        async def second_response():
+            yield chunk(content="Done")
+
+        agent = MobileAgent()
+        agent.max_iterations = 2
+        agent._call_model = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[first_response(), second_response()]
+        )
+        agent._execute_tool_calls = AsyncMock()  # type: ignore[method-assign]
+
+        output = [part async for part in agent.run_conversation("Find Python", stream=True)]
+
+        assert output == ["Done"]
+        streamed_message = agent.messages[1]
+        assert streamed_message.role == "assistant"
+        assert streamed_message.content == ""
+        assert len(streamed_message.tool_calls) == 1
+        call = streamed_message.tool_calls[0]
+        assert call.call_id == "call_stream"
+        assert call.name == "web_search"
+        assert call.arguments == {"query": "python"}
+        agent._execute_tool_calls.assert_awaited_once_with([call])
+        assert agent.messages[-1].content == "Done"
+
+    @pytest.mark.asyncio
+    async def test_non_streaming_response_is_persisted_in_agent_history(self):
+        response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="Hello", tool_calls=[])
+                )
+            ]
+        )
+        agent = MobileAgent()
+        agent._call_model = AsyncMock(return_value=response)  # type: ignore[method-assign]
+
+        output = [part async for part in agent.run_conversation("Hi", stream=False)]
+
+        assert output == ["Hello"]
+        assert [(message.role, message.content) for message in agent.messages] == [
+            ("user", "Hi"),
+            ("assistant", "Hello"),
+        ]
+
     def test_create_mobile_agent_function(self):
         agent = create_mobile_agent()
         assert isinstance(agent, MobileAgent)
@@ -222,6 +301,25 @@ class TestMobileAgent:
         agent = MobileAgent(provider="gemini")
         agent.settings.gemini_api_key = "AIza-xxx"
         assert agent._get_api_key() == "AIza-xxx"
+        profile = agent._get_provider_profile()
+        assert profile is not None
+        assert profile.name == "google"
+
+    @patch.dict("os.environ", {"DEEPSEEK_API_KEY": "sk-deepseek"}, clear=False)
+    def test_provider_registry_resolves_environment_key_and_endpoint(self):
+        agent = MobileAgent(provider="deepseek")
+
+        assert agent._get_api_key() == "sk-deepseek"
+        assert agent._get_base_url() == "https://api.deepseek.com/v1"
+        assert agent._client is not None
+
+    def test_non_openai_compatible_provider_fails_explicitly(self):
+        agent = MobileAgent(provider="anthropic")
+
+        assert agent._client is None
+        assert agent._client_error is not None
+        assert "requires the 'messages' API" in agent._client_error
+        assert "OpenRouter" in agent._client_error
 
     def test_get_api_key_unknown(self):
         agent = MobileAgent()

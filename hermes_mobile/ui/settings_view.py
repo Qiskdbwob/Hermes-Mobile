@@ -33,7 +33,6 @@ class SettingsView:
                 self._build_model_dropdown(),
                 self._build_api_key_field("OpenRouter", "openrouter_api_key"),
                 self._build_api_key_field("OpenAI", "openai_api_key"),
-                self._build_api_key_field("Anthropic", "anthropic_api_key"),
                 self._build_api_key_field("Gemini", "gemini_api_key"),
                 section_header(dark, t("settings.agent_settings")),
                 ft.Row(
@@ -163,7 +162,6 @@ class SettingsView:
             options=[
                 ft.dropdown.Option(key="openrouter", text="OpenRouter"),
                 ft.dropdown.Option(key="openai", text="OpenAI"),
-                ft.dropdown.Option(key="anthropic", text="Anthropic"),
                 ft.dropdown.Option(key="gemini", text="Google Gemini"),
             ],
             on_select=self._on_provider_change,

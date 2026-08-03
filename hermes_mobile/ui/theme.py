@@ -41,6 +41,9 @@ DARK = {
     "sidebar_border": "#234A9C",
     "user_bubble": "#143B91",
     "user_bubble_border": "#3A63BD",
+    "composer": "#0B286E",
+    "composer_border": "#3158AD",
+    "success": "#6EE7A8",
 }
 
 LIGHT = {
@@ -66,6 +69,9 @@ LIGHT = {
     "sidebar_border": "#E0E9FB",
     "user_bubble": "#EDF2FF",
     "user_bubble_border": "#D7E2FC",
+    "composer": "#FFFFFF",
+    "composer_border": "#D7E2FC",
+    "success": "#16845B",
 }
 
 

@@ -32,7 +32,13 @@
     "tool_result": "Resultado de {tool}:",
     "error": "Erro",
     "clear_chat": "Limpar Chat",
-    "new_session": "Nova Sessao"
+    "new_session": "Nova sessão",
+    "tagline": "Um agente capaz, onde você estiver.",
+    "add_context": "Adicionar contexto",
+    "choose_model": "Escolher modelo",
+    "model_settings": "Configurações de provedor e modelo",
+    "working": "Trabalhando",
+    "model_not_configured": "modelo não configurado"
   },
   "settings": {
     "title": "Configuracoes",
@@ -70,7 +76,9 @@
     "port": "Porta",
     "platforms": "Plataformas",
     "pairing": "Pareamento",
-    "pending_codes": "Codigos de Pareamento Pendentes",
+    "pending_codes": "Códigos de Pareamento Pendentes",
+    "no_pending_codes": "Nenhum código de pareamento pendente",
+    "no_pending_codes_hint": "Usuários recebem um código ao enviar mensagem para um bot conectado",
     "port_label": "Porta: {port}",
     "platforms_label": "Plataformas: {count}",
     "pairing_label": "Pareamento: {status}",

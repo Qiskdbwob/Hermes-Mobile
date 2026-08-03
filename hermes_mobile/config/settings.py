@@ -2,6 +2,8 @@
 
 import json
 import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -12,14 +14,31 @@ logger = logging.getLogger(__name__)
 
 
 def _get_default_data_dir() -> str:
-    """Get the default data directory, handling Android sandbox paths"""
+    """Resolve a durable writable data directory across desktop and native builds."""
+    # Flet 0.86 exposes the platform application-support directory synchronously.
+    # On Android this is /data/data/<package>/files/data; Path.home() is /data and
+    # must never be used because it is outside the app sandbox.
+    flet_storage = os.environ.get("FLET_APP_STORAGE_DATA")
+    if flet_storage:
+        return str(Path(flet_storage).expanduser())
+
     try:
         home = Path.home()
-        if home and home.exists():
+        if home.exists() and os.access(home, os.W_OK):
             return str(home / ".hermes_mobile")
-    except Exception:
+    except (OSError, RuntimeError):
         pass
-    return str(Path.cwd() / ".hermes_mobile")
+
+    try:
+        cwd = Path.cwd()
+        if cwd.exists() and os.access(cwd, os.W_OK):
+            return str(cwd / ".hermes_mobile")
+    except OSError:
+        pass
+
+    # Last-resort scratch path keeps startup functional on unusual embedded
+    # runtimes. Packaged Flet apps should always take the durable env path above.
+    return str(Path(tempfile.gettempdir()) / "hermes_mobile")
 
 
 class HermesMobileSettings(BaseSettings):

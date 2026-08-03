@@ -32,7 +32,13 @@
     "tool_result": "Result from {tool}:",
     "error": "Error",
     "clear_chat": "Clear Chat",
-    "new_session": "New Session"
+    "new_session": "New Session",
+    "tagline": "A capable agent, wherever you are.",
+    "add_context": "Add context",
+    "choose_model": "Choose model",
+    "model_settings": "Provider and model settings",
+    "working": "Working",
+    "model_not_configured": "model not configured"
   },
   "settings": {
     "title": "Settings",
@@ -71,6 +77,8 @@
     "platforms": "Platforms",
     "pairing": "Pairing",
     "pending_codes": "Pending Pairing Codes",
+    "no_pending_codes": "No pending pairing codes",
+    "no_pending_codes_hint": "Users receive a code when they message a connected bot",
     "port_label": "Port: {port}",
     "platforms_label": "Platforms: {count}",
     "pairing_label": "Pairing: {status}",

@@ -99,35 +99,33 @@ class MemoryView:
         stats = self._cached_stats or {}
         return ft.Row(
             [
-                self._build_stat_card(
-                    "Conversations", str(stats.get("conversations", 0)), ft.Icons.CHAT
-                ),
+                self._build_stat_card("Chats", str(stats.get("conversations", 0)), ft.Icons.CHAT),
                 self._build_stat_card("Sessions", str(stats.get("sessions", 0)), ft.Icons.MESSAGE),
                 self._build_stat_card(
-                    "Memory Entries", str(stats.get("memory_entries", 0)), ft.Icons.MEMORY
+                    "Entries", str(stats.get("memory_entries", 0)), ft.Icons.MEMORY
                 ),
                 self._build_stat_card(
                     "Size", self._format_size(stats.get("db_size_bytes", 0)), ft.Icons.STORAGE
                 ),
             ],
-            spacing=12,
+            spacing=0,
         )
 
     def _build_stat_card(self, label: str, value: str, icon) -> ft.Control:
-        """Build a stat card"""
+        """Build one compact metric cell separated by hairlines."""
+        c = mode_colors(self.app.dark_mode)
         return ft.Container(
             content=ft.Column(
                 [
-                    ft.Icon(icon, size=24, color=ft.Colors.PRIMARY),
-                    ft.Text(value, size=20, weight=ft.FontWeight.BOLD),
-                    ft.Text(label, size=12, color=ft.Colors.OUTLINE),
+                    ft.Icon(icon, size=20, color=ft.Colors.PRIMARY),
+                    ft.Text(value, size=18, weight=ft.FontWeight.W_700, color=c["foreground"]),
+                    ft.Text(label, size=11, color=c["muted_foreground"]),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=4,
+                spacing=3,
             ),
-            padding=16,
-            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-            border_radius=12,
+            padding=ft.Padding.symmetric(horizontal=4, vertical=10),
+            border=ft.Border.only(right=ft.BorderSide(1, c["border"])),
             expand=True,
         )
 

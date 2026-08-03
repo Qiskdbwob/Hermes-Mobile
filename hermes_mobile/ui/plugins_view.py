@@ -6,7 +6,13 @@ import flet as ft
 
 from hermes_mobile.config.settings import get_settings
 from hermes_mobile.plugins import get_plugin_registry
-from hermes_mobile.ui.common import close_dialog, open_dialog
+from hermes_mobile.ui.common import (
+    close_dialog,
+    empty_state,
+    flat_list_row,
+    open_dialog,
+    page_header,
+)
 
 
 class PluginsView:
@@ -19,140 +25,95 @@ class PluginsView:
 
     def build(self) -> ft.Control:
         """Build the plugins view"""
+        actions = ft.Row(
+            [
+                ft.IconButton(
+                    icon=ft.Icons.REFRESH,
+                    tooltip="Refresh",
+                    on_click=lambda e: self._refresh(),
+                ),
+                ft.IconButton(
+                    icon=ft.Icons.FOLDER_OPEN,
+                    tooltip="Open Plugin Directory",
+                    on_click=lambda e: self._open_plugin_dir(),
+                ),
+            ],
+            spacing=0,
+        )
+        plugins = self.plugin_registry.list_plugins()
         return ft.Column(
             [
-                # Header
-                ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.Text("Plugins", size=24, weight=ft.FontWeight.BOLD),
-                            ft.Row(
-                                [
-                                    ft.IconButton(
-                                        icon=ft.Icons.REFRESH,
-                                        tooltip="Refresh",
-                                        on_click=lambda e: self._refresh(),
-                                    ),
-                                    ft.IconButton(
-                                        icon=ft.Icons.FOLDER_OPEN,
-                                        tooltip="Open Plugin Directory",
-                                        on_click=lambda e: self._open_plugin_dir(),
-                                    ),
-                                ],
-                                spacing=8,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    padding=ft.Padding.symmetric(horizontal=20, vertical=16),
+                page_header(
+                    self.app.dark_mode,
+                    "Plugins",
+                    f"{len(plugins)} installed extensions",
+                    actions,
                 ),
-                ft.Divider(height=1),
-                # Plugin list
-                ft.Container(
-                    content=self._build_plugin_list(),
-                    padding=ft.Padding.symmetric(horizontal=20, vertical=16),
-                    expand=True,
-                ),
+                ft.Container(content=self._build_plugin_list(plugins), expand=True),
             ],
             expand=True,
+            spacing=0,
         )
 
-    def _build_plugin_list(self) -> ft.Control:
+    def _build_plugin_list(self, plugins=None) -> ft.Control:
         """Build the plugin list"""
-        plugins = self.plugin_registry.list_plugins()
+        plugins = plugins if plugins is not None else self.plugin_registry.list_plugins()
 
+        controls = [self._build_plugin_card(plugin) for plugin in plugins]
+        if not controls:
+            return empty_state(
+                self.app.dark_mode,
+                "No plugins installed",
+                "Add plugins to the mobile plugin directory.",
+                ft.Icons.EXTENSION_OFF,
+            )
         return ft.ListView(
-            controls=[self._build_plugin_card(plugin) for plugin in plugins]
-            or [
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Icon(ft.Icons.PLUGIN, size=48, color=ft.Colors.OUTLINE),
-                            ft.Text("No plugins installed", size=16, color=ft.Colors.OUTLINE),
-                            ft.Text(
-                                "Add plugins to ~/.hermes_mobile/plugins/", color=ft.Colors.OUTLINE
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.CENTER,
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                        spacing=12,
-                    ),
-                    alignment=ft.Alignment.CENTER,
-                    padding=40,
-                )
-            ],
-            spacing=12,
+            controls=controls,
+            padding=ft.Padding.symmetric(horizontal=12),
+            spacing=0,
             expand=True,
         )
 
     def _build_plugin_card(self, manifest) -> ft.Control:
-        """Build a plugin card"""
+        """Build a dense plugin row with overflow actions."""
         plugin = self.plugin_registry.get_plugin(manifest.name)
         enabled = plugin.enabled if plugin else True
-
-        return ft.Card(
-            content=ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Row(
-                            [
-                                ft.Icon(ft.Icons.EXTENSION, color=ft.Colors.PRIMARY),
-                                ft.Column(
-                                    [
-                                        ft.Text(manifest.name, weight=ft.FontWeight.BOLD, size=16),
-                                        ft.Text(
-                                            manifest.description,
-                                            size=12,
-                                            color=ft.Colors.OUTLINE,
-                                            max_lines=2,
-                                            overflow=ft.TextOverflow.ELLIPSIS,
-                                        ),
-                                    ],
-                                    spacing=2,
-                                    expand=True,
-                                ),
-                                ft.Switch(
-                                    value=enabled,
-                                    on_change=lambda e, m=manifest: self._toggle_plugin(
-                                        m, e.control.value
-                                    ),
-                                ),
-                            ],
-                            spacing=12,
-                        ),
-                        ft.Divider(height=1),
-                        ft.Row(
-                            [
-                                ft.Text(f"v{manifest.version}", size=11, color=ft.Colors.OUTLINE),
-                                ft.Text(f"by {manifest.author}", size=11, color=ft.Colors.OUTLINE)
-                                if manifest.author
-                                else ft.Container(),
-                                ft.Text(f"Kind: {manifest.kind}", size=11, color=ft.Colors.OUTLINE),
-                            ],
-                            alignment=ft.MainAxisAlignment.START,
-                            spacing=16,
-                        ),
-                        ft.Divider(height=1),
-                        ft.Row(
-                            [
-                                ft.TextButton(
-                                    "Details",
-                                    icon=ft.Icons.INFO_OUTLINE,
-                                    on_click=lambda e, m=manifest: self._show_plugin_details(m),
-                                ),
-                                ft.TextButton(
-                                    "Tools",
-                                    icon=ft.Icons.BUILD,
-                                    on_click=lambda e, m=manifest: self._show_plugin_tools(m),
-                                ),
-                            ],
-                            alignment=ft.MainAxisAlignment.END,
-                        ),
-                    ],
-                    spacing=8,
+        metadata = f"v{manifest.version}"
+        if manifest.author:
+            metadata += f" · {manifest.author}"
+        metadata += f" · {manifest.kind}"
+        subtitle = f"{manifest.description}\n{metadata}"
+        actions = ft.PopupMenuButton(
+            icon=ft.Icons.MORE_VERT,
+            tooltip="Plugin actions",
+            items=[
+                ft.PopupMenuItem(
+                    content=ft.Text("Details"),
+                    on_click=lambda e, m=manifest: self._show_plugin_details(m),
                 ),
-                padding=16,
-            ),
+                ft.PopupMenuItem(
+                    content=ft.Text("Tools"),
+                    on_click=lambda e, m=manifest: self._show_plugin_tools(m),
+                ),
+            ],
+        )
+        trailing = ft.Row(
+            [
+                ft.Switch(
+                    value=enabled,
+                    on_change=lambda e, m=manifest: self._toggle_plugin(m, e.control.value),
+                ),
+                actions,
+            ],
+            spacing=0,
+            tight=True,
+        )
+        return flat_list_row(
+            self.app.dark_mode,
+            manifest.name,
+            subtitle,
+            ft.Icon(ft.Icons.EXTENSION, size=18, color=ft.Colors.PRIMARY),
+            trailing,
         )
 
     def _toggle_plugin(self, manifest, enabled: bool):

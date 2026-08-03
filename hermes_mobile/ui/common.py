@@ -1,28 +1,32 @@
-"""Shared UI helpers for Hermes Mobile.
+"""Shared visual primitives for Hermes Mobile.
 
-Small primitives used across views so the "nous" contract stays in one place:
-flat sections with hairline dividers, snack bars, and dialogs using the
-current Flet API (page.overlay / page.show_dialog).
+The desktop contract is the source of truth: flat over boxed, tokens over
+literals, one hairline per structural boundary, and the real Nous brand mark.
+These helpers keep every Flet view on that contract instead of drifting into
+Material-card defaults.
 """
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any, Iterable, List, Optional
 
 import flet as ft
 
 from hermes_mobile.ui.theme import mode_colors
 
+MONO_FONT = '"Courier Prime", "Cascadia Code", "SF Mono", monospace'
+
 
 def snack(page: ft.Page, text: str, error: bool = False):
     """Show a themed snack bar."""
     c = mode_colors(getattr(page, "theme_mode", None) == ft.ThemeMode.DARK)
-    content = ft.Text(text, color=c["foreground"] if not error else c["destructive"])
+    content = ft.Text(text, color=c["destructive"] if error else c["foreground"])
     sb = ft.SnackBar(
         content=content,
         bgcolor=c["popover"],
         behavior=ft.SnackBarBehavior.FLOATING,
         elevation=0,
+        shape=ft.RoundedRectangleBorder(radius=8),
     )
     sb.open = True
     page.overlay.append(sb)
@@ -40,8 +44,71 @@ def close_dialog(page: ft.Page, dialog: ft.AlertDialog):
     page.update()
 
 
+def brand_mark(size: int = 32) -> ft.Control:
+    """Canonical Nous girl mark on its fixed white tile."""
+    return ft.Container(
+        content=ft.Image(
+            src="nous-girl.jpg",
+            width=size,
+            height=size,
+            fit=ft.BoxFit.CONTAIN,
+        ),
+        width=size,
+        height=size,
+        bgcolor="#FFFFFF",
+        border_radius=ft.BorderRadius.all(max(4, size // 7)),
+        clip_behavior=ft.ClipBehavior.HARD_EDGE,
+    )
+
+
+def status_dot(color: str, size: int = 7, tooltip: str = "") -> ft.Control:
+    """Small operational presence indicator."""
+    return ft.Container(
+        width=size,
+        height=size,
+        border_radius=ft.BorderRadius.all(size),
+        bgcolor=color,
+        tooltip=tooltip or None,
+    )
+
+
+def hairline(dark: bool, vertical: bool = False) -> ft.Container:
+    """A one-pixel structural divider."""
+    c = mode_colors(dark)
+    if vertical:
+        return ft.Container(width=1, bgcolor=c["border"])
+    return ft.Container(height=1, bgcolor=c["border"])
+
+
+def section_label(dark: bool, text: str, trailing: str = "") -> ft.Control:
+    """Compact mono section label used for data/navigation groupings."""
+    c = mode_colors(dark)
+    controls: List[ft.Control] = [
+        ft.Text(
+            text.upper(),
+            size=10,
+            weight=ft.FontWeight.W_700,
+            color=c["muted_foreground"],
+            font_family=MONO_FONT,
+        )
+    ]
+    if trailing:
+        controls.extend(
+            [
+                ft.Container(expand=True),
+                ft.Text(
+                    trailing,
+                    size=10,
+                    color=c["muted_foreground"],
+                    font_family=MONO_FONT,
+                ),
+            ]
+        )
+    return ft.Row(controls, spacing=8)
+
+
 def section_header(dark: bool, title: str, subtitle: str = "") -> ft.Control:
-    """Flat section header: title + optional subtitle, hairline below."""
+    """Flat section heading; whitespace groups content, not cards."""
     c = mode_colors(dark)
     controls: List[ft.Control] = [
         ft.Text(
@@ -49,7 +116,7 @@ def section_header(dark: bool, title: str, subtitle: str = "") -> ft.Control:
             size=17,
             weight=ft.FontWeight.W_700,
             color=c["foreground"],
-        ),
+        )
     ]
     if subtitle:
         controls.append(
@@ -59,29 +126,106 @@ def section_header(dark: bool, title: str, subtitle: str = "") -> ft.Control:
                 color=c["muted_foreground"],
             )
         )
-    controls.append(ft.Container(height=2))
-    return ft.Column(
-        [
-            *controls,
-            ft.Container(
-                height=1,
-                bgcolor=c["border"],
-                border_radius=ft.BorderRadius.all(1),
-            ),
-        ],
-        spacing=2,
+    return ft.Column(controls, spacing=3)
+
+
+def page_header(
+    dark: bool,
+    title: str,
+    subtitle: str = "",
+    action: Optional[ft.Control] = None,
+) -> ft.Control:
+    """Canonical page heading for durable destinations and operational views."""
+    c = mode_colors(dark)
+    text_controls: List[ft.Control] = [
+        ft.Text(title, size=20, weight=ft.FontWeight.W_700, color=c["foreground"])
+    ]
+    if subtitle:
+        text_controls.append(ft.Text(subtitle, size=12, color=c["muted_foreground"]))
+    row: List[ft.Control] = [ft.Column(text_controls, spacing=2, expand=True)]
+    if action is not None:
+        row.append(action)
+    return ft.Container(
+        content=ft.Row(row, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        padding=ft.Padding.only(left=16, right=10, top=14, bottom=12),
+        border=ft.Border.only(bottom=ft.BorderSide(1, c["border"])),
     )
 
 
-def hairline(dark: bool) -> ft.Container:
-    """A 1px hairline in the current border color."""
-    return ft.Container(height=1, bgcolor=mode_colors(dark)["border"])
+def empty_state(
+    dark: bool,
+    title: str,
+    description: str,
+    icon: Any = ft.Icons.INBOX_OUTLINED,
+    action: Optional[ft.Control] = None,
+    branded: bool = False,
+) -> ft.Control:
+    """One shared empty-state language for all views."""
+    c = mode_colors(dark)
+    lead = brand_mark(52) if branded else ft.Icon(icon, size=32, color=c["muted_foreground"])
+    controls: List[ft.Control] = [
+        lead,
+        ft.Container(height=10),
+        ft.Text(title, size=19, weight=ft.FontWeight.W_700, color=c["foreground"], text_align=ft.TextAlign.CENTER),
+        ft.Text(description, size=13, color=c["muted_foreground"], text_align=ft.TextAlign.CENTER),
+    ]
+    if action is not None:
+        controls.extend([ft.Container(height=8), action])
+    return ft.Container(
+        content=ft.Column(
+            controls,
+            spacing=4,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            alignment=ft.MainAxisAlignment.CENTER,
+        ),
+        alignment=ft.Alignment.CENTER,
+        expand=True,
+        padding=ft.Padding.symmetric(horizontal=32, vertical=24),
+    )
 
 
-def page_scaffold(controls: List[ft.Control], dark: bool, padding: int = 16) -> ft.Control:
+def flat_list_row(
+    dark: bool,
+    title: str,
+    subtitle: str = "",
+    leading: Optional[ft.Control] = None,
+    trailing: Optional[ft.Control] = None,
+    on_click=None,
+) -> ft.Control:
+    """Flat list row with one optional trailing action; never a nested card."""
+    c = mode_colors(dark)
+    text: List[ft.Control] = [
+        ft.Text(title, size=14, weight=ft.FontWeight.W_500, color=c["foreground"])
+    ]
+    if subtitle:
+        text.append(
+            ft.Text(
+                subtitle,
+                size=11,
+                color=c["muted_foreground"],
+                max_lines=2,
+                overflow=ft.TextOverflow.ELLIPSIS,
+            )
+        )
+    row: List[ft.Control] = []
+    if leading is not None:
+        row.extend([leading, ft.Container(width=4)])
+    row.append(ft.Column(text, spacing=2, expand=True))
+    if trailing is not None:
+        row.append(trailing)
+    return ft.Container(
+        content=ft.Row(row, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=8),
+        padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+        on_click=on_click,
+        ink=on_click is not None,
+        border_radius=ft.BorderRadius.all(6),
+    )
+
+
+def page_scaffold(controls: Iterable[ft.Control], dark: bool, padding: int = 16) -> ft.Control:
     """Standard scrollable page body with flat styling."""
     return ft.ListView(
-        controls=controls,
+        controls=list(controls),
         padding=ft.Padding.all(padding),
         spacing=18,
     )
@@ -93,21 +237,27 @@ def flat_button(
     on_click,
     dark: bool,
     destructive: bool = False,
+    primary: bool = False,
 ) -> ft.Control:
-    """Flat action button consistent with the nous surface."""
+    """Token-driven button with no Material elevation."""
     c = mode_colors(dark)
+    if primary:
+        foreground = c["primary_foreground"]
+        background = c["primary"]
+        side = ft.BorderSide(1, c["primary"])
+    else:
+        foreground = c["destructive"] if destructive else c["foreground"]
+        background = None
+        side = ft.BorderSide(1, c["destructive"] if destructive else c["border"])
     return ft.ElevatedButton(
         text,
         icon=icon,
         on_click=on_click,
         style=ft.ButtonStyle(
-            color=c["destructive"] if destructive else c["foreground"],
-            bgcolor=c["card"],
+            color=foreground,
+            bgcolor=background,
             elevation=0,
-            shape=ft.RoundedRectangleBorder(radius=10),
-            side=ft.BorderSide(
-                1, c["destructive"] if destructive else c["border"]
-            ),
+            shape=ft.RoundedRectangleBorder(radius=7),
+            side=side,
         ),
     )
-

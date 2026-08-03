@@ -21,7 +21,19 @@ from hermes_mobile.ui.theme import mode_colors
 logger = logging.getLogger(__name__)
 
 # Skip heavy/binary-ish extensions in the artifact list
-_SKIP_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".mp3", ".db", ".pyc"}
+_SKIP_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".mp4",
+    ".mp3",
+    ".db",
+    ".key",
+    ".invalid",
+    ".pyc",
+}
 _MAX_PREVIEW = 4000
 
 
@@ -99,7 +111,12 @@ class ArtifactsView:
             )
 
         items = [self._build_file_row(f) for f in files]
-        list_view = ft.ListView(controls=items, padding=ft.Padding.all(12), spacing=8, expand=True)
+        list_view = ft.ListView(
+            controls=items,
+            padding=ft.Padding.symmetric(horizontal=12),
+            spacing=0,
+            expand=True,
+        )
 
         return ft.Column(
             [header, ft.Container(height=1, bgcolor=c["border"]), list_view],
@@ -170,10 +187,8 @@ class ArtifactsView:
                 ],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.Padding.symmetric(horizontal=12, vertical=8),
-            border_radius=ft.BorderRadius.all(10),
-            bgcolor=c["card"],
-            border=ft.Border.all(1, c["border"]),
+            padding=ft.Padding.symmetric(horizontal=10, vertical=7),
+            border=ft.Border.only(bottom=ft.BorderSide(1, c["border"])),
         )
 
     def _preview(self, path: Path):

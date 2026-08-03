@@ -8,7 +8,15 @@ from hermes_mobile.toolsets import (
     get_toolset,
     list_toolsets_by_category,
 )
-from hermes_mobile.ui.common import close_dialog, open_dialog, snack
+from hermes_mobile.ui.common import (
+    MONO_FONT,
+    close_dialog,
+    flat_list_row,
+    open_dialog,
+    page_header,
+    section_label,
+    snack,
+)
 from hermes_mobile.ui.theme import mode_colors
 
 
@@ -23,33 +31,23 @@ class ToolsView:
     def build(self) -> ft.Control:
         """Build the tools view"""
         dark = self.app.dark_mode
-        c = mode_colors(dark)
         toolsets = get_all_toolsets()
         categories = list_toolsets_by_category()
 
         return ft.Column(
             [
-                # Header
-                ft.Container(
-                    content=ft.Row(
-                        [
-                            ft.Text("Tools & Toolsets", size=22, weight=ft.FontWeight.W_700, color=c["foreground"]),
-                            ft.IconButton(
-                                icon=ft.Icons.REFRESH,
-                                tooltip="Refresh",
-                                on_click=lambda e: self._refresh(),
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                page_header(
+                    dark,
+                    "Tools",
+                    f"{len(toolsets)} toolsets · {sum(len(get_toolset(name)) for name in toolsets)} resolved tools",
+                    ft.IconButton(
+                        icon=ft.Icons.REFRESH,
+                        icon_size=18,
+                        tooltip="Refresh",
+                        on_click=lambda e: self._refresh(),
                     ),
-                    padding=ft.Padding.symmetric(horizontal=20, vertical=14),
                 ),
-                ft.Container(height=1, bgcolor=c["border"]),
-                # Toolsets by category
-                ft.Container(
-                    content=self._build_toolsets_list(categories),
-                    expand=True,
-                ),
+                ft.Container(content=self._build_toolsets_list(categories), expand=True),
             ],
             expand=True,
             spacing=0,
@@ -61,11 +59,10 @@ class ToolsView:
 
         for category, toolset_names in sorted(categories.items()):
             controls.append(
-                ft.Text(
-                    category.replace("_", " ").title(),
-                    size=16,
-                    weight=ft.FontWeight.BOLD,
-                    color=ft.Colors.PRIMARY,
+                section_label(
+                    self.app.dark_mode,
+                    category.replace("_", " "),
+                    str(len(toolset_names)),
                 )
             )
 
@@ -84,62 +81,39 @@ class ToolsView:
     def _build_toolset_card(self, name: str, toolset: dict) -> ft.Control:
         """Build a toolset card"""
         description = toolset.get("description", "")
-        tools = toolset.get("tools", [])
-        includes = toolset.get("includes", [])
 
         # Get resolved tools
         resolved_tools = get_toolset(name)
         tool_count = len(resolved_tools)
 
-        return ft.Card(
-            content=ft.Container(
-                content=ft.Column(
+        c = mode_colors(self.app.dark_mode)
+        return ft.Container(
+            content=flat_list_row(
+                self.app.dark_mode,
+                name,
+                description or "No description",
+                leading=ft.Icon(ft.Icons.TERMINAL, size=16, color=c["muted_foreground"]),
+                trailing=ft.Row(
                     [
-                        ft.Row(
-                            [
-                                ft.Icon(ft.Icons.BUILD, color=ft.Colors.PRIMARY),
-                                ft.Column(
-                                    [
-                                        ft.Text(name, weight=ft.FontWeight.BOLD, size=16),
-                                        ft.Text(
-                                            description or "No description",
-                                            size=12,
-                                            color=ft.Colors.OUTLINE,
-                                            max_lines=2,
-                                            overflow=ft.TextOverflow.ELLIPSIS,
-                                        ),
-                                    ],
-                                    spacing=2,
-                                    expand=True,
-                                ),
-                                ft.Chip(
-                                    label=ft.Text(f"{tool_count} tools"),
-                                    leading=ft.Icon(ft.Icons.BUILD, size=14),
-                                ),
-                            ],
-                            spacing=12,
+                        ft.Text(
+                            str(tool_count),
+                            size=10,
+                            color=c["muted_foreground"],
+                            font_family=MONO_FONT,
                         ),
-                        ft.Divider(height=1),
-                        ft.Row(
-                            [
-                                ft.TextButton(
-                                    "View Tools",
-                                    icon=ft.Icons.LIST,
-                                    on_click=lambda e, n=name: self._show_toolset_details(n),
-                                ),
-                                ft.TextButton(
-                                    "Enable",
-                                    icon=ft.Icons.CHECK_CIRCLE,
-                                    on_click=lambda e, n=name: self._enable_toolset(n),
-                                ),
-                            ],
-                            alignment=ft.MainAxisAlignment.END,
+                        ft.IconButton(
+                            icon=ft.Icons.ADD,
+                            icon_size=17,
+                            tooltip="Enable toolset",
+                            on_click=lambda e, n=name: self._enable_toolset(n),
                         ),
                     ],
-                    spacing=8,
+                    spacing=1,
+                    tight=True,
                 ),
-                padding=16,
+                on_click=lambda e, n=name: self._show_toolset_details(n),
             ),
+            border=ft.Border.only(bottom=ft.BorderSide(1, c["border"])),
         )
 
     def _show_toolset_details(self, name: str):

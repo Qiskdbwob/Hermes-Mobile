@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime
@@ -13,12 +14,16 @@ from hermes_mobile.config.settings import get_settings
 from hermes_mobile.core.context_compressor import compress_messages, needs_compression
 from hermes_mobile.core.delegation import delegate_parallel_tasks
 from hermes_mobile.core.prompt_caching import apply_cache_control, supports_caching
-
-
+from hermes_mobile.providers import ProviderProfile, get_provider_profile
 from hermes_mobile.tools.agent_tools import (
     clarify_tool,
     memory_tool,
     session_search_tool,
+)
+from hermes_mobile.tools.browser_session import (
+    browser_back_tool,
+    browser_click_tool,
+    browser_get_images_tool,
 )
 from hermes_mobile.tools.desktop_tools import (
     cronjob_tool,
@@ -30,28 +35,6 @@ from hermes_mobile.tools.desktop_tools import (
     skills_list_tool,
     todo_tool,
 )
-from hermes_mobile.tools.path_security import validate_and_resolve_path
-from hermes_mobile.tools.security import safe_calculate
-from hermes_mobile.tools.web_tools import (
-    browser_navigate_tool,
-    browser_snapshot_tool,
-    web_extract_tool,
-    web_search_tool,
-)
-from hermes_mobile.tools.browser_session import (
-    browser_back_tool,
-    browser_click_tool,
-    browser_get_images_tool,
-)
-from hermes_mobile.tools.media_tools import (
-    image_generate_tool,
-    vision_analyze_tool,
-)
-from hermes_mobile.tools.project_tools import (
-    project_create_tool,
-    project_list_tool,
-    project_switch_tool,
-)
 from hermes_mobile.tools.kanban_tools import (
     kanban_block_tool,
     kanban_comment_tool,
@@ -61,6 +44,23 @@ from hermes_mobile.tools.kanban_tools import (
     kanban_move_tool,
     kanban_show_tool,
     kanban_unblock_tool,
+)
+from hermes_mobile.tools.media_tools import (
+    image_generate_tool,
+    vision_analyze_tool,
+)
+from hermes_mobile.tools.path_security import validate_and_resolve_path
+from hermes_mobile.tools.project_tools import (
+    project_create_tool,
+    project_list_tool,
+    project_switch_tool,
+)
+from hermes_mobile.tools.security import safe_calculate
+from hermes_mobile.tools.web_tools import (
+    browser_navigate_tool,
+    browser_snapshot_tool,
+    web_extract_tool,
+    web_search_tool,
 )
 
 logger = logging.getLogger(__name__)
@@ -182,14 +182,17 @@ class MobileAgent:
         self._init_client()
 
     def _init_client(self):
-        """Initialize the OpenAI-compatible client.
-
-        Graceful degradation: if no API key is configured for the active
-        provider, the client stays ``None`` and ``_client_error`` carries a
-        user-facing message instead of raising at startup. The UI can then
-        show a setup prompt instead of an error screen.
-        """
+        """Initialize the active OpenAI-compatible provider client."""
         from openai import AsyncOpenAI
+
+        profile = self._get_provider_profile()
+        if profile is not None and profile.api_mode != "chat_completions":
+            self._client = None
+            self._client_error = (
+                f"Provider '{self.provider}' requires the {profile.api_mode!r} API, "
+                "which is not available in this mobile build. Use it through OpenRouter."
+            )
+            return
 
         api_key = self._get_api_key()
         base_url = self._get_base_url()
@@ -198,13 +201,14 @@ class MobileAgent:
             self._client = None
             self._client_error = (
                 f"No API key configured for provider '{self.provider}'. "
-                "Open Settings and add your key (e.g. OPENROUTER_API_KEY)."
+                "Open Settings and add the provider API key."
             )
             return
 
         self._client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
+            default_headers=profile.default_headers if profile else None,
             timeout=self.settings.request_timeout,
             max_retries=self.settings.max_retries,
         )
@@ -216,28 +220,38 @@ class MobileAgent:
             raise RuntimeError(self._client_error or "AI provider not configured.")
         return self._client
 
+    def _get_provider_profile(self) -> Optional[ProviderProfile]:
+        """Resolve the configured provider, including registry aliases."""
+        return get_provider_profile(self.provider)
+
     def _get_api_key(self) -> str:
-        """Get API key for current provider"""
-        if self.provider == "openrouter":
-            return self.settings.openrouter_api_key or ""
-        elif self.provider == "openai":
-            return self.settings.openai_api_key or ""
-        elif self.provider == "anthropic":
-            return self.settings.anthropic_api_key or ""
-        elif self.provider == "gemini":
-            return self.settings.gemini_api_key or ""
+        """Resolve the API key from persisted settings, then profile env vars."""
+        profile = self._get_provider_profile()
+        canonical_name = profile.name if profile else self.provider
+        setting_names = {
+            "openrouter": "openrouter_api_key",
+            "openai": "openai_api_key",
+            "anthropic": "anthropic_api_key",
+            "google": "gemini_api_key",
+        }
+        setting_name = setting_names.get(canonical_name)
+        if setting_name:
+            persisted = getattr(self.settings, setting_name, "") or ""
+            if persisted:
+                return persisted
+
+        if profile:
+            for env_var in profile.env_vars:
+                value = os.environ.get(env_var, "").strip()
+                if value:
+                    return value
         return ""
 
     def _get_base_url(self) -> str:
-        """Get base URL for current provider"""
-        if self.provider == "openrouter":
-            return "https://openrouter.ai/api/v1"
-        elif self.provider == "openai":
-            return "https://api.openai.com/v1"
-        elif self.provider == "anthropic":
-            return "https://api.anthropic.com/v1"
-        elif self.provider == "gemini":
-            return "https://generativelanguage.googleapis.com/v1beta/openai/"
+        """Resolve the provider endpoint from its declarative profile."""
+        profile = self._get_provider_profile()
+        if profile and profile.base_url:
+            return profile.base_url
         return "https://openrouter.ai/api/v1"
 
     def add_message(self, message: Message):
@@ -306,17 +320,53 @@ class MobileAgent:
 
             try:
                 response = await self._call_model(stream=stream)
+                content_parts: List[str] = []
 
                 if stream:
+                    streamed_tool_calls: Dict[int, Dict[str, str]] = {}
                     async for chunk in response:
-                        if chunk.choices[0].delta.content:
-                            yield chunk.choices[0].delta.content
+                        choices = getattr(chunk, "choices", None) or []
+                        if not choices:
+                            continue
+                        delta = getattr(choices[0], "delta", None)
+                        if delta is None:
+                            continue
+
+                        content_delta = getattr(delta, "content", None)
+                        if content_delta:
+                            content_parts.append(content_delta)
+                            yield content_delta
+
+                        for tc_delta in getattr(delta, "tool_calls", None) or []:
+                            index = getattr(tc_delta, "index", 0) or 0
+                            call = streamed_tool_calls.setdefault(
+                                index,
+                                {"id": "", "name": "", "arguments": ""},
+                            )
+                            call_id = getattr(tc_delta, "id", None)
+                            if call_id:
+                                call["id"] = call_id
+                            function = getattr(tc_delta, "function", None)
+                            if function is not None:
+                                name = getattr(function, "name", None)
+                                arguments = getattr(function, "arguments", None)
+                                if name:
+                                    call["name"] += name
+                                if arguments:
+                                    call["arguments"] += arguments
+
+                    content = "".join(content_parts)
+                    tool_calls = self._build_stream_tool_calls(streamed_tool_calls)
                 else:
                     content = response.choices[0].message.content or ""
                     yield content
+                    tool_calls = self._extract_tool_calls(response)
 
-                # Handle tool calls
-                tool_calls = self._extract_tool_calls(response)
+                # Keep the API history valid: an assistant message containing the
+                # tool calls must precede their tool result messages.
+                if content or tool_calls:
+                    self.add_assistant_message(content, tool_calls)
+
                 if tool_calls:
                     await self._execute_tool_calls(tool_calls)
                     continue  # Continue conversation with tool results
@@ -350,6 +400,31 @@ class MobileAgent:
             max_tokens=self.settings.max_tokens,
             stream=stream,
         )
+
+    def _build_stream_tool_calls(
+        self,
+        streamed_tool_calls: Dict[int, Dict[str, str]],
+    ) -> List[ToolCall]:
+        """Reconstruct OpenAI tool-call deltas after a streamed response."""
+        tool_calls: List[ToolCall] = []
+        for index in sorted(streamed_tool_calls):
+            raw = streamed_tool_calls[index]
+            if not raw["name"]:
+                logger.warning("Ignoring streamed tool call without a function name")
+                continue
+            try:
+                arguments = json.loads(raw["arguments"] or "{}")
+            except json.JSONDecodeError:
+                logger.warning("Invalid JSON arguments for streamed tool %s", raw["name"])
+                arguments = {}
+            tool_calls.append(
+                ToolCall(
+                    name=raw["name"],
+                    arguments=arguments,
+                    call_id=raw["id"] or str(uuid.uuid4()),
+                )
+            )
+        return tool_calls
 
     def _extract_tool_calls(self, response) -> List[ToolCall]:
         """Extract tool calls from model response"""

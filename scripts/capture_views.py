@@ -39,7 +39,7 @@ async def capture_flow(page: ft.Page):
 
 
 def main():
-    ft.app(target=capture_flow)
+    ft.run(capture_flow)
 
 
 if __name__ == "__main__":

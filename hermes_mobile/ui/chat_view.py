@@ -14,6 +14,7 @@ import flet as ft
 
 from hermes_mobile.core.agent import Message, ToolCall
 from hermes_mobile.locales import t
+from hermes_mobile.ui.common import MONO_FONT, brand_mark
 from hermes_mobile.ui.theme import mode_colors
 
 logger = logging.getLogger(__name__)
@@ -46,26 +47,30 @@ class ChatView:
             auto_scroll=True,
         )
 
+        c = mode_colors(self.app.dark_mode)
+        self._sending = False
         self.input_field = ft.TextField(
             hint_text=t("chat.input_placeholder"),
             multiline=True,
             min_lines=1,
-            max_lines=5,
+            max_lines=6,
             expand=True,
             on_submit=self._on_send,
-            border_radius=ft.BorderRadius.all(22),
-            filled=True,
+            border=ft.InputBorder.NONE,
+            filled=False,
             text_size=15,
-            content_padding=ft.Padding.only(left=16, right=16, top=12, bottom=12),
+            text_style=ft.TextStyle(color=c["foreground"]),
+            hint_style=ft.TextStyle(color=c["muted_foreground"]),
+            content_padding=ft.Padding.only(left=12, right=8, top=10, bottom=6),
         )
 
         self.send_button = ft.IconButton(
             icon=ft.Icons.ARROW_UPWARD,
             on_click=self._on_send,
-            icon_color=ft.Colors.ON_PRIMARY,
-            bgcolor=ft.Colors.PRIMARY,
+            icon_color=c["background"],
+            bgcolor=c["foreground"],
             tooltip=t("chat.send"),
-            icon_size=20,
+            icon_size=18,
         )
 
         self.status_text = ft.Text(
@@ -76,73 +81,92 @@ class ChatView:
         )
 
     def build(self) -> ft.Control:
-        """Build the chat view"""
+        """Build the flat desktop-derived transcript and docked composer."""
         if not self.messages and not self.chat_list.controls:
             self._show_welcome()
 
         c = mode_colors(self.app.dark_mode)
-
-        # Conversation header: brand + live provider/model status (desktop parity)
-        provider = getattr(self.app.settings, "default_provider", "openrouter")
         model = getattr(self.app.settings, "default_model", "")
-        short_model = model.split("/")[-1] if "/" in model else model
-        status = f"{provider} · {short_model}"
+        short_model = model.split("/")[-1] if model else t("chat.choose_model")
 
-        header = ft.Container(
+        context_menu = ft.PopupMenuButton(
+            icon=ft.Icons.ADD,
+            icon_color=c["muted_foreground"],
+            tooltip=t("chat.add_context"),
+            items=[
+                ft.PopupMenuItem(
+                    icon=ft.Icons.ATTACH_FILE,
+                    content="Artifacts",
+                    on_click=lambda e: self.app._navigate_to("artifacts"),
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.PSYCHOLOGY_OUTLINED,
+                    content="Memory",
+                    on_click=lambda e: self.app._navigate_to("memory"),
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.BUILD_OUTLINED,
+                    content="Tools",
+                    on_click=lambda e: self.app._navigate_to("tools"),
+                ),
+            ],
+        )
+        model_pill = ft.Container(
             content=ft.Row(
                 [
-                    ft.Icon(ft.Icons.AUTO_AWESOME, size=18, color=ft.Colors.PRIMARY),
-                    ft.Container(width=8),
-                    ft.Column(
-                        [
-                            ft.Text(
-                                "Hermes Mobile",
-                                size=15,
-                                weight=ft.FontWeight.W_700,
-                                color=c["foreground"],
-                            ),
-                            ft.Text(
-                                status,
-                                size=11,
-                                color=c["muted_foreground"],
-                            ),
-                        ],
-                        spacing=0,
+                    ft.Container(
+                        width=6,
+                        height=6,
+                        bgcolor=c["success"],
+                        border_radius=ft.BorderRadius.all(6),
+                    ),
+                    ft.Text(
+                        short_model,
+                        size=10,
+                        color=c["muted_foreground"],
+                        max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS,
                     ),
                 ],
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=6,
+                tight=True,
             ),
-            padding=ft.Padding.symmetric(horizontal=16, vertical=10),
-            border=ft.Border.only(bottom=ft.BorderSide(1, c["border"])),
+            padding=ft.Padding.symmetric(horizontal=9, vertical=5),
+            border=ft.Border.all(1, c["border"]),
+            border_radius=ft.BorderRadius.all(12),
+            on_click=lambda e: self.app._navigate_to("settings"),
+            ink=True,
+            tooltip=t("chat.model_settings"),
+        )
+
+        composer = ft.Container(
+            content=ft.Column(
+                [
+                    self.input_field,
+                    ft.Row(
+                        [
+                            context_menu,
+                            model_pill,
+                            ft.Container(expand=True),
+                            self.send_button,
+                        ],
+                        spacing=4,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                ],
+                spacing=0,
+            ),
+            margin=ft.Margin.only(left=10, right=10, top=6, bottom=8),
+            padding=ft.Padding.only(left=2, right=6, top=2, bottom=5),
+            bgcolor=c["composer"],
+            border=ft.Border.all(1, c["composer_border"]),
+            border_radius=ft.BorderRadius.all(16),
         )
 
         return ft.Column(
             [
-                header,
-                # Status bar
-                ft.Container(
-                    content=self.status_text,
-                    padding=ft.Padding.symmetric(horizontal=16, vertical=6),
-                    visible=False,
-                ),
-                # Chat messages
-                ft.Container(
-                    content=self.chat_list,
-                    expand=True,
-                ),
-                # Input area
-                ft.Container(
-                    content=ft.Row(
-                        [
-                            self.input_field,
-                            ft.Container(width=4),
-                            self.send_button,
-                        ],
-                        vertical_alignment=ft.CrossAxisAlignment.END,
-                    ),
-                    padding=ft.Padding.only(left=12, right=12, top=10, bottom=10),
-                    border=ft.Border.only(top=ft.BorderSide(1, c["border"])),
-                ),
+                ft.Container(content=self.chat_list, expand=True),
+                composer,
             ],
             expand=True,
             spacing=0,
@@ -173,38 +197,36 @@ class ChatView:
         welcome = ft.Container(
             content=ft.Column(
                 [
-                    ft.Container(
-                        content=ft.Icon(
-                            ft.Icons.AUTO_AWESOME,
-                            size=56,
-                            color=ft.Colors.PRIMARY,
-                        ),
-                        padding=ft.Padding.all(20),
-                        border_radius=ft.BorderRadius.all(28),
-                        bgcolor=c["muted"],
-                    ),
-                    ft.Container(height=20),
+                    brand_mark(64),
+                    ft.Container(height=18),
                     ft.Text(
-                        "Hermes Mobile",
-                        size=26,
+                        "Hermes",
+                        size=27,
                         weight=ft.FontWeight.W_700,
                         color=c["foreground"],
                         text_align=ft.TextAlign.CENTER,
                     ),
-                    ft.Container(height=6),
+                    ft.Text(
+                        t("chat.tagline"),
+                        size=13,
+                        color=c["foreground"],
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                    ft.Container(height=8),
                     ft.Text(
                         subtitle,
-                        size=14,
+                        size=12,
                         color=c["muted_foreground"],
                         text_align=ft.TextAlign.CENTER,
                     ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 alignment=ft.MainAxisAlignment.CENTER,
-                spacing=0,
+                spacing=3,
             ),
             alignment=ft.Alignment.CENTER,
-            expand=True,
+            height=max(360, int((self.page.height or 720) - 260)),
+            padding=ft.Padding.symmetric(horizontal=32, vertical=20),
         )
 
         self.chat_list.controls.append(welcome)
@@ -214,12 +236,23 @@ class ChatView:
     # ------------------------------------------------------------------
 
     def _on_send(self, e):
-        """Handle send button click"""
+        """Submit one turn; concurrent sends are rejected visibly."""
+        if self._sending:
+            return
         text = self.input_field.value
         if text and text.strip():
             self.input_field.value = ""
             self.page.update()
             asyncio.create_task(self.app.send_message(text.strip()))
+
+    def set_busy(self, busy: bool):
+        """Synchronize composer affordances with the active agent turn."""
+        self._sending = busy
+        self.input_field.disabled = busy
+        self.send_button.disabled = busy
+        self.send_button.icon = ft.Icons.MORE_HORIZ if busy else ft.Icons.ARROW_UPWARD
+        self.send_button.tooltip = t("chat.working") if busy else t("chat.send")
+        self.page.update()
 
     # ------------------------------------------------------------------
     # Message lifecycle
@@ -343,15 +376,16 @@ class ChatView:
         c = mode_colors(self.app.dark_mode)
         status_text = ft.Text(
             tool_call.name,
-            size=13,
+            size=12,
             weight=ft.FontWeight.W_500,
             color=c["muted_foreground"],
+            font_family=MONO_FONT,
         )
         spinner = ft.ProgressRing(width=14, height=14, stroke_width=2)
 
         row = ft.Row(
             [
-                ft.Icon(ft.Icons.AUTO_AWESOME, size=15, color=ft.Colors.PRIMARY),
+                ft.Icon(ft.Icons.TERMINAL, size=14, color=c["muted_foreground"]),
                 ft.Container(width=6),
                 status_text,
                 ft.Container(expand=True),
@@ -471,8 +505,8 @@ class ChatView:
         except Exception:
             pass
 
-    def clear_chat(self):
-        """Clear the chat"""
+    def clear_chat(self, show_welcome: bool = True):
+        """Start a clean session in both the UI and agent runtime."""
         self.chat_list.controls.clear()
         self.messages.clear()
         self.current_assistant_text = ""
@@ -480,9 +514,12 @@ class ChatView:
         self._tool_call_rows.clear()
         self._streaming_container = None
         self._streaming_control = None
+        self._sending = False
+        self.input_field.disabled = False
+        self.send_button.disabled = False
+        self.send_button.icon = ft.Icons.ARROW_UPWARD
         if self.agent:
-            try:
-                asyncio.create_task(self.agent.clear_conversation())
-            except Exception:
-                pass
+            self.agent.clear_conversation()
+        if show_welcome:
+            self._show_welcome()
         self.page.update()

@@ -1,10 +1,13 @@
 """Tests for settings module."""
 
-from pathlib import Path
 
-import pytest
 
-from hermes_mobile.config.settings import HermesMobileSettings, get_settings, reload_settings
+from hermes_mobile.config.settings import (
+    HermesMobileSettings,
+    _get_default_data_dir,
+    get_settings,
+    reload_settings,
+)
 
 
 class TestHermesMobileSettings:
@@ -97,6 +100,7 @@ class TestHermesMobileSettings:
         """When Path.home() raises, should fall back to cwd."""
         import pathlib
 
+        monkeypatch.delenv("FLET_APP_STORAGE_DATA", raising=False)
         original_home = pathlib.Path.home
         monkeypatch.setattr(
             pathlib.Path, "home", lambda: (_ for _ in ()).throw(PermissionError("mock"))
@@ -104,3 +108,24 @@ class TestHermesMobileSettings:
         s = HermesMobileSettings()
         assert ".hermes_mobile" in s.data_dir
         monkeypatch.setattr(pathlib.Path, "home", original_home)
+
+    def test_flet_native_storage_takes_priority(self, monkeypatch, temp_dir):
+        """Packaged Flet apps must use their private durable storage directory."""
+        native_data = temp_dir / "native-data"
+        monkeypatch.setenv("FLET_APP_STORAGE_DATA", str(native_data))
+        assert _get_default_data_dir() == str(native_data)
+        assert HermesMobileSettings().data_dir == str(native_data)
+
+    def test_unwritable_android_home_falls_back_to_writable_cwd(self, monkeypatch, temp_dir):
+        """Android's existing but unwritable /data home must not be selected."""
+        import pathlib
+
+        monkeypatch.delenv("FLET_APP_STORAGE_DATA", raising=False)
+        android_home = pathlib.Path("/data")
+        monkeypatch.setattr(pathlib.Path, "home", lambda: android_home)
+        monkeypatch.setattr(pathlib.Path, "cwd", lambda: temp_dir)
+        monkeypatch.setattr(
+            "hermes_mobile.config.settings.os.access",
+            lambda path, mode: pathlib.Path(path) == temp_dir,
+        )
+        assert _get_default_data_dir() == str(temp_dir / ".hermes_mobile")

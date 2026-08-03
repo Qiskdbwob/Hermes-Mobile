@@ -1,14 +1,17 @@
 """Mobile Memory Provider - SQLite-based with encryption support"""
 
+import base64
 import json
 import logging
+import os
+import platform
 import sqlite3
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
@@ -28,39 +31,59 @@ class MobileMemoryProvider:
         self.encrypt = encrypt
         self._conn: Optional[sqlite3.Connection] = None
         self._fernet: Optional[Fernet] = None
+        self._legacy_fernet: Optional[Fernet] = None
 
         if encrypt:
             self._init_encryption(encryption_key)
 
         self._init_db()
 
+    @staticmethod
+    def _derive_fernet_key(secret: str) -> bytes:
+        """Derive a Fernet key for explicit secrets and legacy migrations."""
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=b"hermes_mobile_salt",
+            iterations=100000,
+        )
+        return base64.urlsafe_b64encode(kdf.derive(secret.encode()))
+
+    def _load_or_create_device_key(self) -> bytes:
+        """Return a stable random key stored inside the app's private data sandbox."""
+        key_path = self.db_path.with_suffix(f"{self.db_path.suffix}.key")
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            key = key_path.read_bytes().strip()
+            Fernet(key)  # validate before trusting persisted bytes
+            return key
+        except FileNotFoundError:
+            pass
+        except (ValueError, TypeError):
+            logger.error("Invalid memory key file at %s; preserving it for recovery", key_path)
+            key_path.replace(key_path.with_suffix(f"{key_path.suffix}.invalid"))
+
+        generated = Fernet.generate_key()
+        try:
+            fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            return key_path.read_bytes().strip()
+        with os.fdopen(fd, "wb") as key_file:
+            key_file.write(generated)
+            key_file.flush()
+            os.fsync(key_file.fileno())
+        return generated
+
     def _init_encryption(self, key: Optional[str]):
-        """Initialize encryption"""
+        """Initialize stable encryption, retaining legacy device-key decryption."""
         if key:
-            # Use provided key
-            kdf = PBKDF2HMAC(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=b"hermes_mobile_salt",
-                iterations=100000,
-            )
-            key_bytes = kdf.derive(key.encode())
-        else:
-            # Generate key from device-specific data
-            import platform
+            self._fernet = Fernet(self._derive_fernet_key(key))
+            return
 
-            device_id = platform.node() + platform.machine()
-            kdf = PBKDF2HMAC(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=b"hermes_mobile_salt",
-                iterations=100000,
-            )
-            key_bytes = kdf.derive(device_id.encode())
-
-        import base64
-
-        self._fernet = Fernet(base64.urlsafe_b64encode(key_bytes))
+        self._fernet = Fernet(self._load_or_create_device_key())
+        legacy_device_id = platform.node() + platform.machine()
+        if legacy_device_id:
+            self._legacy_fernet = Fernet(self._derive_fernet_key(legacy_device_id))
 
     def _encrypt(self, data: str) -> str:
         """Encrypt data"""
@@ -74,7 +97,15 @@ class MobileMemoryProvider:
             return data
         try:
             return self._fernet.decrypt(data.encode()).decode()
+        except InvalidToken:
+            if self._legacy_fernet is not None:
+                try:
+                    return self._legacy_fernet.decrypt(data.encode()).decode()
+                except InvalidToken:
+                    pass
+            return data
         except Exception:
+            logger.exception("Unexpected memory decryption failure")
             return data
 
     def _init_db(self):

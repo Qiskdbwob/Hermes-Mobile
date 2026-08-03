@@ -1,6 +1,6 @@
 """Hermes Mobile - Entry point for Flet build.
 
-On desktop: ``python main.py`` runs ``ft.run(target=main, ...)``.
+On desktop: ``python main.py`` runs ``ft.run(main, ...)``.
 On Android (serious_python): the Flet runtime imports this module and
 calls ``main(page)`` directly; ``__name__`` is never ``"__main__"``
 on Android (the runtime handles that bypass).
@@ -30,6 +30,7 @@ try:
     main = _real_main
 except Exception as _import_err:
     _write_crash_log(_import_err)
+    _import_error_message = str(_import_err)
 
     def main(page):  # type: ignore[no-redef]
         """Fallback main that shows the import error on screen."""
@@ -43,7 +44,7 @@ except Exception as _import_err:
                         ft.Text("Failed to start", size=20, weight=ft.FontWeight.BOLD),
                         ft.Container(height=8),
                         ft.Text(
-                            str(_import_err)[:500],
+                            _import_error_message[:500],
                             size=12,
                             selectable=True,
                         ),
@@ -56,4 +57,4 @@ except Exception as _import_err:
 if __name__ == "__main__":
     import flet as ft
 
-    ft.run(target=main, assets_dir="assets")
+    ft.run(main, assets_dir="assets")

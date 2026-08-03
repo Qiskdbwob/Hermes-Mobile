@@ -6,7 +6,6 @@ import os
 
 import flet as ft
 
-from hermes_mobile.locales import t
 from hermes_mobile.config.settings import get_settings, reload_settings
 from hermes_mobile.core.agent import Message, MobileAgent, ToolCall, create_mobile_agent
 from hermes_mobile.cron.scheduler import (
@@ -16,21 +15,23 @@ from hermes_mobile.gateway.mobile_gateway import (
     GatewayConfig,
     GatewayManager,
 )
+from hermes_mobile.locales import t
 from hermes_mobile.memory.provider import MobileMemoryProvider
 from hermes_mobile.plugins import get_plugin_registry
 from hermes_mobile.skills.manager import MobileSkillManager
-from hermes_mobile.ui.chat_view import ChatView
 from hermes_mobile.ui.artifacts_view import ArtifactsView
+from hermes_mobile.ui.chat_view import ChatView
+from hermes_mobile.ui.common import brand_mark, snack, status_dot
 from hermes_mobile.ui.cron_view import CronView
 from hermes_mobile.ui.gateway_view import GatewayView
+from hermes_mobile.ui.kanban_view import KanbanView
 from hermes_mobile.ui.memory_view import MemoryView
 from hermes_mobile.ui.plugins_view import PluginsView
 from hermes_mobile.ui.settings_view import SettingsView
 from hermes_mobile.ui.skills_view import SkillsView
-from hermes_mobile.ui.tools_view import ToolsView
 from hermes_mobile.ui.terminal_view import TerminalView
-from hermes_mobile.ui.kanban_view import KanbanView
 from hermes_mobile.ui.theme import build_theme, mode_colors
+from hermes_mobile.ui.tools_view import ToolsView
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +39,9 @@ logger = logging.getLogger(__name__)
 class HermesMobileApp:
     """Main Hermes Mobile Application"""
 
-    # Mobile bottom navigation: primary destinations mirroring the desktop
-    # shell (Chat, Skills, Messaging, Artifacts) + Settings. The remaining
-    # views live behind the overflow menu.
-    MOBILE_VIEWS = ["chat", "skills", "messaging", "artifacts", "settings"]
+    # Desktop information architecture on a phone: only durable destinations
+    # live in the bottom bar. Operational surfaces stay in the More menu.
+    MOBILE_VIEWS = ["chat", "skills", "messaging", "artifacts"]
     DESKTOP_VIEWS = [
         "chat",
         "skills",
@@ -56,7 +56,7 @@ class HermesMobileApp:
         "kanban",
         "settings",
     ]
-    OVERFLOW_VIEWS = ["tools", "memory", "cron", "gateway", "plugins", "terminal", "kanban"]
+    OVERFLOW_VIEWS = ["tools", "memory", "cron", "plugins", "terminal", "kanban", "settings"]
 
     def __init__(self, page: ft.Page):
         self.page = page
@@ -116,9 +116,12 @@ class HermesMobileApp:
         self.page.title = "Hermes Mobile"
         self.page.padding = 0
         self.page.spacing = 0
-        platform_str = str(getattr(self.page, "platform", ""))
-        self.is_mobile = platform_str.lower() in ("android", "ios")
-        # Allow forcing the mobile layout for desktop testing
+        raw_platform = getattr(self.page, "platform", "")
+        platform_str = str(getattr(raw_platform, "value", raw_platform)).lower()
+        page_width = float(getattr(self.page, "width", 0) or 0)
+        self.is_mobile = platform_str in ("android", "ios") or (0 < page_width < 768)
+        self.page.on_resize = self._on_page_resize
+        # Allow forcing the mobile layout for desktop/web visual testing
         if os.environ.get("HERMES_MOBILE_LAYOUT", "").lower() == "mobile":
             self.is_mobile = True
 
@@ -140,6 +143,26 @@ class HermesMobileApp:
             self.page.theme_mode = ft.ThemeMode.LIGHT
         else:
             self.page.theme_mode = ft.ThemeMode.SYSTEM
+
+    def _on_page_resize(self, event: ft.PageResizeEvent):
+        """Swap the shell when a web/desktop viewport crosses the phone breakpoint."""
+        raw_platform = getattr(self.page, "platform", "")
+        platform_name = str(getattr(raw_platform, "value", raw_platform)).lower()
+        width = float(getattr(event, "width", 0) or getattr(self.page, "width", 0) or 0)
+        force_mobile = os.environ.get("HERMES_MOBILE_LAYOUT", "").lower() == "mobile"
+        should_be_mobile = force_mobile or platform_name in ("android", "ios") or (
+            0 < width < 768
+        )
+        if should_be_mobile == self.is_mobile or self.chat_view is None:
+            return
+
+        active_view = self.current_view
+        self.is_mobile = should_be_mobile
+        self.page.clean()
+        self._build_ui()
+        if active_view != "chat":
+            self._switch_view(active_view)
+        self.page.update()
 
     @property
     def dark_mode(self) -> bool:
@@ -277,17 +300,24 @@ class HermesMobileApp:
                 selected_index=0,
                 destinations=bar_destinations,
                 on_change=self._on_navigation_change,
-                height=64,
+                height=58,
+            )
+            mobile_shell = ft.Column(
+                [
+                    self.app_bar,
+                    ft.Container(self.content_area, expand=True),
+                    self.nav,
+                ],
+                expand=True,
+                spacing=0,
             )
             self.page.add(
-                ft.Column(
-                    [
-                        self.app_bar,
-                        ft.Container(self.content_area, expand=True),
-                        self.nav,
-                    ],
+                ft.SafeArea(
+                    content=mobile_shell,
+                    avoid_intrusions_top=True,
+                    avoid_intrusions_bottom=True,
+                    maintain_bottom_view_padding=True,
                     expand=True,
-                    spacing=0,
                 )
             )
         else:
@@ -297,7 +327,7 @@ class HermesMobileApp:
                 min_width=110,
                 min_extended_width=190,
                 leading=ft.Container(
-                    content=ft.Icon(ft.Icons.AUTO_AWESOME, size=28, color=ft.Colors.PRIMARY),
+                    content=brand_mark(34),
                     padding=ft.Padding.only(left=12, top=8, bottom=16),
                 ),
                 group_alignment=-0.9,
@@ -313,58 +343,62 @@ class HermesMobileApp:
             )
 
     def _build_app_bar(self) -> ft.Control:
-        """Build the brand header shown on mobile."""
+        """Build one compact mobile shell header — no duplicate chat header."""
         c = mode_colors(self.dark_mode)
+        provider = getattr(self.settings, "default_provider", "openrouter")
+        model = getattr(self.settings, "default_model", "")
+        short_model = model.split("/")[-1] if model else t("chat.model_not_configured")
 
-        self._gateway_indicator = ft.Container(
-            width=8,
-            height=8,
-            border_radius=4,
-            bgcolor=c["muted_foreground"],
-            tooltip=t("gateway.offline") if hasattr(t, "gateway") else "Gateway",
+        self._gateway_indicator = status_dot(
+            c["muted_foreground"],
+            size=7,
+            tooltip=t("gateway.offline"),
+        )
+        self._new_session_button = ft.IconButton(
+            icon=ft.Icons.ADD,
+            icon_size=19,
+            icon_color=c["muted_foreground"],
+            tooltip=t("chat.new_session"),
+            on_click=self._start_new_session,
         )
 
         overflow_menu = ft.PopupMenuButton(
-            icon=ft.Icons.MORE_VERT,
+            icon=ft.Icons.MORE_HORIZ,
+            icon_color=c["muted_foreground"],
             tooltip=t("nav.more"),
             items=[
                 ft.PopupMenuItem(
-                    icon=ft.Icons.BUILD,
+                    icon=ft.Icons.BUILD_OUTLINED,
                     content=t("nav.tools"),
                     on_click=lambda e: self._navigate_to("tools"),
                 ),
                 ft.PopupMenuItem(
-                    icon=ft.Icons.PSYCHOLOGY,
+                    icon=ft.Icons.PSYCHOLOGY_OUTLINED,
                     content=t("nav.memory"),
                     on_click=lambda e: self._navigate_to("memory"),
                 ),
                 ft.PopupMenuItem(
-                    icon=ft.Icons.SCHEDULE,
+                    icon=ft.Icons.SCHEDULE_OUTLINED,
                     content=t("nav.cron"),
                     on_click=lambda e: self._navigate_to("cron"),
                 ),
                 ft.PopupMenuItem(
-                    icon=ft.Icons.HUB,
-                    content=t("nav.gateway"),
-                    on_click=lambda e: self._navigate_to("gateway"),
-                ),
-                ft.PopupMenuItem(
-                    icon=ft.Icons.EXTENSION,
+                    icon=ft.Icons.EXTENSION_OUTLINED,
                     content=t("nav.plugins"),
                     on_click=lambda e: self._navigate_to("plugins"),
                 ),
                 ft.PopupMenuItem(
-                    icon=ft.Icons.TERMINAL,
+                    icon=ft.Icons.TERMINAL_OUTLINED,
                     content=t("nav.terminal"),
                     on_click=lambda e: self._navigate_to("terminal"),
                 ),
                 ft.PopupMenuItem(
-                    icon=ft.Icons.VIEW_KANBAN,
+                    icon=ft.Icons.VIEW_KANBAN_OUTLINED,
                     content=t("nav.kanban"),
                     on_click=lambda e: self._navigate_to("kanban"),
                 ),
                 ft.PopupMenuItem(
-                    icon=ft.Icons.SETTINGS,
+                    icon=ft.Icons.SETTINGS_OUTLINED,
                     content=t("nav.settings"),
                     on_click=lambda e: self._navigate_to("settings"),
                 ),
@@ -372,35 +406,40 @@ class HermesMobileApp:
         )
 
         self._app_bar_title = ft.Text(
-            "Hermes Mobile",
-            size=17,
-            weight=ft.FontWeight.W_700,
+            t("chat.new_session"),
+            size=14,
+            weight=ft.FontWeight.W_600,
             color=c["foreground"],
+            max_lines=1,
+            overflow=ft.TextOverflow.ELLIPSIS,
         )
         self._app_bar_subtitle = ft.Text(
-            "",
-            size=11,
+            f"{provider} · {short_model}",
+            size=10,
             color=c["muted_foreground"],
-            visible=False,
+            max_lines=1,
+            overflow=ft.TextOverflow.ELLIPSIS,
         )
 
         return ft.Container(
             content=ft.Row(
                 [
-                    ft.Icon(ft.Icons.AUTO_AWESOME, size=22, color=ft.Colors.PRIMARY),
+                    brand_mark(30),
+                    ft.Container(width=2),
                     ft.Column(
                         [self._app_bar_title, self._app_bar_subtitle],
                         spacing=0,
                         alignment=ft.MainAxisAlignment.CENTER,
+                        expand=True,
                     ),
-                    ft.Container(expand=True),
                     self._gateway_indicator,
-                    ft.Container(width=4),
+                    self._new_session_button,
                     overflow_menu,
                 ],
+                spacing=6,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.Padding.only(left=16, right=8, top=10, bottom=10),
+            padding=ft.Padding.only(left=12, right=4, top=8, bottom=8),
             bgcolor=c["sidebar"],
             border=ft.Border.only(bottom=ft.BorderSide(1, c["sidebar_border"])),
         )
@@ -426,7 +465,7 @@ class HermesMobileApp:
                     ft.ElevatedButton(
                         "Retry",
                         icon=ft.Icons.REFRESH,
-                        on_click=lambda e: self.page.window.close(),
+                        on_click=self._retry_initialization,
                     ),
                 ],
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -435,15 +474,27 @@ class HermesMobileApp:
         )
         self.page.update()
 
+    def _retry_initialization(self, e=None):
+        """Retry startup in place instead of closing the application."""
+        self.page.clean()
+        self.error_message = None
+        try:
+            self._setup_page()
+            self._initialize_components()
+            self._build_ui()
+        except Exception as exc:
+            logger.exception("Retry initialization failed")
+            self.error_message = str(exc)
+            self._show_error_screen()
+
     def _navigate_to(self, view: str):
-        """Navigate to a view by name (used by overflow menu)."""
-        if view not in self._views:
+        """Navigate from the primary bar or the operational More menu."""
+        if view not in self.DESKTOP_VIEWS:
             return
-        index = self._views.index(view)
         self._switch_view(view)
-        if self.nav is not None:
+        if self.nav is not None and view in self._views:
             try:
-                self.nav.selected_index = index
+                self.nav.selected_index = self._views.index(view)
             except Exception:
                 pass
         self.page.update()
@@ -467,49 +518,64 @@ class HermesMobileApp:
             print(f"Navigation error: {ex}")
 
     def _switch_view(self, view: str):
-        """Switch the content area to the given view (preserves state)."""
-        self.current_view = view
-
-        view_map = {
-            "chat": self.chat_view.build(),
-            "tools": self.tools_view.build(),
-            "memory": self.memory_view.build(),
-            "skills": self.skills_view.build(),
-            "messaging": self.gateway_view.build(),
-            "artifacts": self.artifacts_view.build(),
-            "cron": self.cron_view.build(),
-            "gateway": self.gateway_view.build(),
-            "plugins": self.plugins_view.build(),
-            "terminal": self.terminal_view.build(),
-            "kanban": self.kanban_view.build(),
-            "settings": self.settings_view.build(),
+        """Build only the requested surface and preserve every other view's state."""
+        builders = {
+            "chat": self.chat_view.build,
+            "tools": self.tools_view.build,
+            "memory": self.memory_view.build,
+            "skills": self.skills_view.build,
+            "messaging": self.gateway_view.build,
+            "artifacts": self.artifacts_view.build,
+            "cron": self.cron_view.build,
+            "gateway": self.gateway_view.build,
+            "plugins": self.plugins_view.build,
+            "terminal": self.terminal_view.build,
+            "kanban": self.kanban_view.build,
+            "settings": self.settings_view.build,
         }
+        builder = builders.get(view)
+        if builder is None or self.content_area is None:
+            return
 
-        new_content = view_map.get(view)
-        if new_content is not None and self.content_area is not None:
-            self.content_area.content = new_content
-            self._update_app_bar_title(view)
-            self.page.update()
+        try:
+            new_content = builder()
+        except Exception as exc:
+            logger.exception("Failed to build view %s", view)
+            snack(self.page, f"Could not open {view}: {exc}", error=True)
+            return
+
+        self.current_view = view
+        self.content_area.content = new_content
+        self._update_app_bar_title(view)
+        self.page.update()
 
     def _update_app_bar_title(self, view: str):
-        """Update the mobile header title for the active view."""
-        if self.is_mobile and hasattr(self, "_app_bar_title"):
-            titles = {
-                "chat": "Hermes Mobile",
-                "tools": t("nav.tools"),
-                "memory": t("nav.memory"),
-                "skills": t("nav.skills"),
-                "messaging": t("nav.messaging"),
-                "artifacts": t("nav.artifacts"),
-                "cron": t("nav.cron"),
-                "gateway": t("nav.gateway"),
-                "plugins": t("nav.plugins"),
-                "terminal": t("nav.terminal"),
-                "kanban": t("nav.kanban"),
-                "settings": t("nav.settings"),
-            }
-            self._app_bar_title.value = titles.get(view, "Hermes Mobile")
-            self.page.update()
+        """Keep title, context and chat-only actions synchronized."""
+        if not self.is_mobile or not hasattr(self, "_app_bar_title"):
+            return
+        if view == "chat":
+            provider = getattr(self.settings, "default_provider", "openrouter")
+            model = getattr(self.settings, "default_model", "")
+            self._app_bar_title.visible = True
+            self._app_bar_subtitle.visible = True
+            self._app_bar_title.value = t("chat.new_session")
+            short_model = model.split("/")[-1] if model else t("chat.model_not_configured")
+            self._app_bar_subtitle.value = f"{provider} · {short_model}"
+        else:
+            # Operational pages own their visible heading and actions. Keeping a
+            # second title in the shell wastes scarce phone height and reads as
+            # an accidental duplicate.
+            self._app_bar_title.visible = False
+            self._app_bar_subtitle.visible = False
+        self._new_session_button.visible = view == "chat"
+
+    def _start_new_session(self, e=None):
+        """Create a genuinely clean local agent session."""
+        if self.chat_view is not None:
+            self.chat_view.clear_chat(show_welcome=True)
+        self._navigate_to("chat")
+        self._app_bar_title.value = t("chat.new_session")
+        self.page.update()
 
     def _on_tool_call(self, tool_call: ToolCall):
         """Handle tool call from agent"""
@@ -527,18 +593,22 @@ class HermesMobileApp:
             self.chat_view.on_message(message)
 
     async def send_message(self, text: str):
-        """Send a message to the agent"""
-        if not text.strip():
+        """Send one turn and always restore the composer after failures."""
+        if not text.strip() or self.chat_view is None or self.agent is None:
             return
 
-        # Add user message to chat view
+        self.chat_view.set_busy(True)
         self.chat_view.add_user_message(text)
-
-        # Run agent conversation
-        async for chunk in self.agent.run_conversation(text, stream=True):
-            self.chat_view.append_assistant_message(chunk)
-
-        self.chat_view.finalize_assistant_message()
+        try:
+            async for chunk in self.agent.run_conversation(text, stream=True):
+                self.chat_view.append_assistant_message(chunk)
+            self.chat_view.finalize_assistant_message()
+        except Exception as exc:
+            logger.exception("Conversation turn failed")
+            self.chat_view.append_assistant_message(f"**Error:** {exc}")
+            self.chat_view.finalize_assistant_message()
+        finally:
+            self.chat_view.set_busy(False)
 
     def reload_settings(self):
         """Reload settings and reinitialize components"""
@@ -574,4 +644,4 @@ async def main(page: ft.Page):
 
 
 if __name__ == "__main__":
-    ft.app(target=main, assets_dir="assets")
+    ft.run(main, assets_dir="assets")

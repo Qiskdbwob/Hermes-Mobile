@@ -1,9 +1,6 @@
 """Tests for MemoryProvider."""
 
-import json
-from datetime import datetime, timedelta
 
-import pytest
 
 from hermes_mobile.core.agent import Message, ToolCall
 from hermes_mobile.memory.provider import MobileMemoryProvider
@@ -25,8 +22,39 @@ class TestMobileMemoryProvider:
     def test_init_with_device_based_encryption(self, temp_dir):
         db_path = temp_dir / "device_encrypted.db"
         mp = MobileMemoryProvider(db_path=db_path, encrypt=True)
+        key_path = db_path.with_suffix(".db.key")
         assert db_path.exists()
+        assert key_path.exists()
+        assert key_path.stat().st_mode & 0o777 == 0o600
         mp.close()
+
+    async def test_device_key_survives_hostname_changes(self, temp_dir, monkeypatch):
+        db_path = temp_dir / "stable_device.db"
+        monkeypatch.setattr("platform.node", lambda: "android-boot-one")
+        first = MobileMemoryProvider(db_path=db_path, encrypt=True)
+        await first.add_memory_entry("stable", "Survives reboot")
+        first.close()
+
+        monkeypatch.setattr("platform.node", lambda: "android-boot-two")
+        second = MobileMemoryProvider(db_path=db_path, encrypt=True)
+        results = await second.search_memory("Survives")
+        second.close()
+
+        assert results[0]["content"] == "Survives reboot"
+
+    def test_legacy_device_ciphertext_remains_readable(self, temp_dir, monkeypatch):
+        from cryptography.fernet import Fernet
+
+        monkeypatch.setattr("platform.node", lambda: "legacy-node")
+        monkeypatch.setattr("platform.machine", lambda: "legacy-machine")
+        legacy_key = MobileMemoryProvider._derive_fernet_key("legacy-nodelegacy-machine")
+        legacy_token = Fernet(legacy_key).encrypt(b"legacy memory").decode()
+
+        provider = MobileMemoryProvider(db_path=temp_dir / "migration.db", encrypt=True)
+        try:
+            assert provider._decrypt(legacy_token) == "legacy memory"
+        finally:
+            provider.close()
 
     async def test_get_stats_empty_db(self, memory_provider):
         stats = await memory_provider.get_stats()

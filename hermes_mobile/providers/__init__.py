@@ -185,6 +185,7 @@ class GoogleProfile(ProviderProfile):
     def __init__(self):
         super().__init__(
             name="google",
+            aliases=("gemini",),
             display_name="Google AI",
             description="Gemini models via Google AI Studio",
             signup_url="https://aistudio.google.com/",

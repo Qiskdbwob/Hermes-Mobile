@@ -1,5 +1,7 @@
 """Gateway View - Gateway and pairing management interface"""
 
+import time
+
 import flet as ft
 
 from hermes_mobile.gateway.mobile_gateway import (
@@ -7,7 +9,9 @@ from hermes_mobile.gateway.mobile_gateway import (
     cli_revoke,
     get_pairing_manager,
 )
-from hermes_mobile.ui.common import snack
+from hermes_mobile.locales import t
+from hermes_mobile.ui.common import empty_state, flat_list_row, snack
+from hermes_mobile.ui.theme import mode_colors
 
 
 class GatewayView:
@@ -71,10 +75,10 @@ class GatewayView:
         """Build gateway status card"""
         enabled = self.gateway_manager.config.enabled if self.gateway_manager else False
         running = self.gateway_manager._running if self.gateway_manager else False
+        c = mode_colors(self.app.dark_mode)
 
-        return ft.Card(
-            content=ft.Container(
-                content=ft.Column(
+        return ft.Container(
+            content=ft.Column(
                     [
                         ft.Row(
                             [
@@ -113,17 +117,17 @@ class GatewayView:
                                 ft.Text(
                                     f"Port: {self.gateway_manager.config.port if self.gateway_manager else 8080}",
                                     size=12,
-                                    color=ft.Colors.OUTLINE,
+                                    color=c["muted_foreground"],
                                 ),
                                 ft.Text(
                                     f"Platforms: {len(self.gateway_manager.config.platforms) if self.gateway_manager else 0}",
                                     size=12,
-                                    color=ft.Colors.OUTLINE,
+                                    color=c["muted_foreground"],
                                 ),
                                 ft.Text(
                                     f"Pairing: {'Enabled' if self.gateway_manager.config.pairing_enabled else 'Disabled'}",
                                     size=12,
-                                    color=ft.Colors.OUTLINE,
+                                    color=c["muted_foreground"],
                                 ),
                             ],
                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -131,8 +135,8 @@ class GatewayView:
                     ],
                     spacing=12,
                 ),
-                padding=16,
-            ),
+            padding=ft.Padding.symmetric(horizontal=0, vertical=12),
+            border=ft.Border.only(bottom=ft.BorderSide(1, c["border"])),
         )
 
     def _build_pairing_list(self) -> ft.Control:
@@ -140,22 +144,11 @@ class GatewayView:
         pending_codes = self.pairing_manager.get_pending_codes()
 
         if not pending_codes:
-            return ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Icon(ft.Icons.VERIFIED_USER, size=48, color=ft.Colors.OUTLINE),
-                        ft.Text("No pending pairing codes", size=16, color=ft.Colors.OUTLINE),
-                        ft.Text(
-                            "Users will receive codes when they message the bot",
-                            color=ft.Colors.OUTLINE,
-                        ),
-                    ],
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=12,
-                ),
-                alignment=ft.Alignment.CENTER,
-                padding=40,
+            return empty_state(
+                self.app.dark_mode,
+                t("gateway.no_pending_codes"),
+                t("gateway.no_pending_codes_hint"),
+                ft.Icons.VERIFIED_USER_OUTLINED,
             )
 
         return ft.ListView(
@@ -165,84 +158,45 @@ class GatewayView:
         )
 
     def _build_pairing_card(self, code) -> ft.Control:
-        """Build a pairing code card"""
-        import time
-
+        """Build a dense pending-pairing row."""
+        c = mode_colors(self.app.dark_mode)
         time_left = int(code.expires_at - time.time())
         minutes = time_left // 60
         seconds = time_left % 60
-
-        return ft.Card(
-            content=ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Row(
-                            [
-                                ft.Icon(ft.Icons.VERIFIED_USER, color=ft.Colors.PRIMARY),
-                                ft.Column(
-                                    [
-                                        ft.Text(
-                                            f"Platform: {code.platform}",
-                                            weight=ft.FontWeight.BOLD,
-                                            size=14,
-                                        ),
-                                        ft.Text(
-                                            f"User: {code.user_name} ({code.user_id})",
-                                            size=12,
-                                            color=ft.Colors.OUTLINE,
-                                        ),
-                                    ],
-                                    spacing=2,
-                                    expand=True,
-                                ),
-                                ft.Container(
-                                    content=ft.Text(
-                                        f"{minutes:02d}:{seconds:02d}",
-                                        size=14,
-                                        weight=ft.FontWeight.BOLD,
-                                        color=ft.Colors.ORANGE
-                                        if time_left < 300
-                                        else ft.Colors.GREEN,
-                                    ),
-                                    padding=ft.Padding.symmetric(horizontal=12, vertical=6),
-                                    bgcolor=ft.Colors.with_opacity(
-                                        0.1,
-                                        ft.Colors.ORANGE if time_left < 300 else ft.Colors.GREEN,
-                                    ),
-                                    border_radius=12,
-                                ),
-                            ],
-                            spacing=12,
-                        ),
-                        ft.Divider(height=1),
-                        ft.Row(
-                            [
-                                ft.Text(
-                                    f"Code: {code.code}",
-                                    size=14,
-                                    font_family="monospace",
-                                    weight=ft.FontWeight.BOLD,
-                                ),
-                                ft.TextButton(
-                                    "Approve",
-                                    icon=ft.Icons.CHECK_CIRCLE,
-                                    style=ft.ButtonStyle(color=ft.Colors.GREEN),
-                                    on_click=lambda e, c=code: self._approve_code(c),
-                                ),
-                                ft.TextButton(
-                                    "Revoke",
-                                    icon=ft.Icons.CANCEL,
-                                    style=ft.ButtonStyle(color=ft.Colors.RED),
-                                    on_click=lambda e, c=code: self._revoke_code(c),
-                                ),
-                            ],
-                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        ),
-                    ],
-                    spacing=8,
+        countdown_color = ft.Colors.ORANGE if time_left < 300 else c["success"]
+        actions = ft.PopupMenuButton(
+            icon=ft.Icons.MORE_VERT,
+            tooltip="Pairing actions",
+            items=[
+                ft.PopupMenuItem(
+                    content=ft.Text("Approve"),
+                    on_click=lambda e, item=code: self._approve_code(item),
                 ),
-                padding=16,
-            ),
+                ft.PopupMenuItem(
+                    content=ft.Text("Revoke"),
+                    on_click=lambda e, item=code: self._revoke_code(item),
+                ),
+            ],
+        )
+        trailing = ft.Row(
+            [
+                ft.Text(
+                    f"{minutes:02d}:{seconds:02d}",
+                    size=12,
+                    color=countdown_color,
+                    font_family="monospace",
+                ),
+                actions,
+            ],
+            spacing=0,
+            tight=True,
+        )
+        return flat_list_row(
+            self.app.dark_mode,
+            f"{code.platform} · {code.user_name}",
+            f"{code.user_id}\nCode {code.code}",
+            ft.Icon(ft.Icons.VERIFIED_USER, size=18, color=ft.Colors.PRIMARY),
+            trailing,
         )
 
     def _approve_code(self, code):
