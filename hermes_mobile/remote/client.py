@@ -14,7 +14,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
@@ -55,8 +55,8 @@ class RemoteEvent:
     session_id: str | None = None
 
 
-EventHandler = Callable[[RemoteEvent], Awaitable[None] | None]
-StateHandler = Callable[[str], Awaitable[None] | None]
+EventHandler = Callable[[RemoteEvent], Optional[Awaitable[None]]]
+StateHandler = Callable[[str], Optional[Awaitable[None]]]
 WebSocketFactory = Callable[..., Awaitable[Any]]
 
 
