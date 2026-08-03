@@ -497,12 +497,12 @@ class TestTicker:
         scheduler._get_cron_dir = lambda: temp_dir / "cron_heartbeat_err"
         _ensure_cron_dirs()
         try:
-            # Create an unreadable heartbeat file
+            # Simulate an unreadable heartbeat deterministically, including as root.
             heartbeat_file = _get_ticker_heartbeat_file()
             heartbeat_file.write_text("some heartbeat")
-            heartbeat_file.chmod(0o000)
 
-            status = get_ticker_status()
+            with patch.object(Path, "read_text", side_effect=PermissionError):
+                status = get_ticker_status()
             # Should not crash — heartbeat is None on error
             assert status["heartbeat"] is None
         finally:
@@ -517,9 +517,9 @@ class TestTicker:
         try:
             success_file = _get_ticker_success_file()
             success_file.write_text("2024-01-01T00:00:00")
-            success_file.chmod(0o000)
 
-            status = get_ticker_status()
+            with patch.object(Path, "read_text", side_effect=PermissionError):
+                status = get_ticker_status()
             assert status["last_success"] is None
         finally:
             scheduler._get_cron_dir = original
