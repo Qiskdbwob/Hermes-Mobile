@@ -46,11 +46,6 @@ dev = [
     "mypy>=1.10.0",
     "black>=24.3.0",
 ]
-android = [
-    "buildozer>=1.5.0",
-    "cython>=3.0.0",
-]
-
 [tool.flet]
 app_name = "Hermes Mobile"
 package = "com.hermes.mobile"

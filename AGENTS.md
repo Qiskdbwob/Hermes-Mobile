@@ -89,7 +89,7 @@ hermes_mobile/
 - **New platform adapters.** Add a `*Adapter` class inheriting `BasePlatformAdapter` in the gateway module.
 - **Refactor god-files into clean modules.** The core agent (`agent.py` at ~800 lines) is a candidate.
 - **Keep the core narrow.** New *model tools* are expensive — every tool ships on every API call. Prefer: extend existing code -> skill -> plugin -> new core tool.
-- **Tests.** The project has NO tests. Adding any test infra is high-value.
+- **Tests.** Keep the pytest suite green and add regression coverage for every agent-loop, storage, entrypoint, tool, and Android lifecycle fix. The current suite has 700+ tests; never assume a UI-only change is safe without running it.
 - **Mobile-native polish.** Flet views should feel native on Android — NavigationBar, bottom sheets, snack bars, proper keyboard handling.
 
 ### What We Don't Want
@@ -180,7 +180,7 @@ Each provider is a `ProviderProfile` dataclass with:
 | Voice | TTS/STT in gateway | Not implemented | Gap |
 | Computer Use | macOS CUA driver | Not implemented | Gap |
 | Desktop App | Electron app | Flet desktop mode | OK |
-| Tests | Extensive pytest suite | 684 tests (19 files) | Good coverage |
+| Tests | Extensive pytest suite | 700+ pytest tests | Good coverage |
 | Docker | Multi-arch, Docker Compose | Not implemented | Gap |
 | Kanban | Multi-agent kanban board | Plugin stub only | Gap |
 | Smart Home | Home Assistant integration | Tool gating only | Gap |
@@ -200,10 +200,8 @@ flet run main.py
 # Run on Android device (USB debugging enabled)
 flet run main.py --target=android
 
-# Build APK
-flet build apk
-# or
-buildozer -v android debug
+# Build a release APK (uses Flet 0.86 and excludes development payload)
+./scripts/build_android.sh
 ```
 
 ### Prerequisites
