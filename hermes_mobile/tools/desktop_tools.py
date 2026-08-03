@@ -9,6 +9,7 @@ values so they can be fed back into the model loop.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -86,6 +87,7 @@ def _search_content(
     base, error = validate_and_resolve_path(path)
     if error:
         return {"error": error}
+    assert base is not None
     if not base.is_dir():
         return {"error": f"Not a directory: {path}"}
 
@@ -97,7 +99,7 @@ def _search_content(
     glob_rx = re.compile(file_glob) if file_glob else None
     matches: List[Dict[str, Any]] = []
     try:
-        for root, dirs, files in base.walk():
+        for root, dirs, files in os.walk(base):
             dirs[:] = [d for d in dirs if not d.startswith((".", "__"))]
             for fname in files:
                 if len(matches) >= limit:
@@ -129,6 +131,7 @@ def _search_filenames(pattern: str, path: str, limit: int) -> Dict[str, Any]:
     base, error = validate_and_resolve_path(path)
     if error:
         return {"error": error}
+    assert base is not None
     if not base.is_dir():
         return {"error": f"Not a directory: {path}"}
 
@@ -138,7 +141,7 @@ def _search_filenames(pattern: str, path: str, limit: int) -> Dict[str, Any]:
         return {"error": f"Invalid pattern: {e}"}
 
     matches: List[str] = []
-    for root, dirs, files in base.walk():
+    for root, dirs, files in os.walk(base):
         dirs[:] = [d for d in dirs if not d.startswith((".", "__"))]
         for fname in files:
             if len(matches) >= limit:
