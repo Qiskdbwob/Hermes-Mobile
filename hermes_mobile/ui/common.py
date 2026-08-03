@@ -166,8 +166,19 @@ def empty_state(
     controls: List[ft.Control] = [
         lead,
         ft.Container(height=10),
-        ft.Text(title, size=19, weight=ft.FontWeight.W_700, color=c["foreground"], text_align=ft.TextAlign.CENTER),
-        ft.Text(description, size=13, color=c["muted_foreground"], text_align=ft.TextAlign.CENTER),
+        ft.Text(
+            title,
+            size=19,
+            weight=ft.FontWeight.W_700,
+            color=c["foreground"],
+            text_align=ft.TextAlign.CENTER,
+        ),
+        ft.Text(
+            description,
+            size=13,
+            color=c["muted_foreground"],
+            text_align=ft.TextAlign.CENTER,
+        ),
     ]
     if action is not None:
         controls.extend([ft.Container(height=8), action])
@@ -249,14 +260,14 @@ def flat_button(
         foreground = c["destructive"] if destructive else c["foreground"]
         background = None
         side = ft.BorderSide(1, c["destructive"] if destructive else c["border"])
-    return ft.ElevatedButton(
-        text,
+    return ft.Button(
+        content=text,
         icon=icon,
         on_click=on_click,
+        elevation=0,
         style=ft.ButtonStyle(
             color=foreground,
             bgcolor=background,
-            elevation=0,
             shape=ft.RoundedRectangleBorder(radius=7),
             side=side,
         ),

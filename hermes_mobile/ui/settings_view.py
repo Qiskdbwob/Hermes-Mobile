@@ -40,7 +40,11 @@ class SettingsView:
                         ft.Icon(ft.Icons.THERMOSTAT, size=18),
                         ft.Text("Temperature", size=14),
                         ft.Container(expand=True),
-                        ft.Text(f"{self.settings.temperature:.1f}", size=13, color=ft.Colors.OUTLINE),
+                        ft.Text(
+                            f"{self.settings.temperature:.1f}",
+                            size=13,
+                            color=ft.Colors.OUTLINE,
+                        ),
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
@@ -280,7 +284,7 @@ class SettingsView:
             ),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
-                ft.ElevatedButton("Clear All", color=ft.Colors.ERROR, on_click=confirm_clear),
+                ft.Button("Clear All", color=ft.Colors.ERROR, on_click=confirm_clear),
             ],
         )
         open_dialog(self.page, dialog)

@@ -25,6 +25,8 @@
     "no_api_key": "To get started, add an API key in Settings.",
     "no_api_key_hint": "Go to Settings > API Key to configure.",
     "ready_help": "Ready to help. Send a message to start.",
+    "remote_ready_help": "Connected to Hermes Remote. Send a message to start.",
+    "remote_offline_help": "Hermes Remote is offline. Open Connections to reconnect.",
     "input_placeholder": "Type a message...",
     "send": "Send",
     "thinking": "Thinking...",

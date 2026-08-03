@@ -143,7 +143,7 @@ class SkillsView:
             content=ft.Column([name_field, desc_field], tight=True, spacing=12),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
-                ft.ElevatedButton("Create", on_click=create),
+                ft.Button("Create", on_click=create),
             ],
         )
         open_dialog(self.page, dialog)
@@ -180,7 +180,7 @@ class SkillsView:
             content=url_field,
             actions=[
                 ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
-                ft.ElevatedButton("Install", on_click=install),
+                ft.Button("Install", on_click=install),
             ],
         )
         open_dialog(self.page, dialog)
@@ -248,7 +248,7 @@ class SkillsView:
             ),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
-                ft.ElevatedButton("Remove", color=ft.Colors.ERROR, on_click=remove),
+                ft.Button("Remove", color=ft.Colors.ERROR, on_click=remove),
             ],
         )
         open_dialog(self.page, dialog)

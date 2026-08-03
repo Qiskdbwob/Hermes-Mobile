@@ -234,7 +234,7 @@ class CronView:
             ),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
-                ft.ElevatedButton("Create", on_click=handle_create),
+                ft.Button("Create", on_click=handle_create),
             ],
         )
         open_dialog(self.page, dialog)
@@ -289,7 +289,7 @@ class CronView:
             ),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
-                ft.ElevatedButton("Save", on_click=handle_update),
+                ft.Button("Save", on_click=handle_update),
             ],
         )
         open_dialog(self.page, dialog)
@@ -317,6 +317,7 @@ class CronView:
     def _show_job_output(self, job):
         """Show job output history"""
         outputs = get_job_output(job.id, limit=20)
+        c = mode_colors(self.app.dark_mode)
 
         content = ft.Column(
             [
@@ -324,9 +325,8 @@ class CronView:
                 ft.Divider(),
                 ft.Column(
                     [
-                        ft.Card(
-                            content=ft.Container(
-                                content=ft.Column(
+                        ft.Container(
+                            content=ft.Column(
                                     [
                                         ft.Row(
                                             [
@@ -359,7 +359,10 @@ class CronView:
                                             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                                         ),
                                         ft.Text(
-                                            f"Duration: {out.duration:.1f}s | Code: {out.return_code}",
+                                            (
+                                                f"Duration: {out.duration:.1f}s | "
+                                                f"Code: {out.return_code}"
+                                            ),
                                             size=10,
                                             color=ft.Colors.OUTLINE,
                                         ),
@@ -373,9 +376,10 @@ class CronView:
                                         ),
                                     ],
                                     spacing=4,
-                                ),
-                                padding=12,
                             ),
+                            padding=12,
+                            border=ft.Border.all(1, c["border"]),
+                            border_radius=ft.BorderRadius.all(8),
                         )
                         for out in outputs
                     ]
@@ -412,7 +416,7 @@ class CronView:
             ),
             actions=[
                 ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
-                ft.ElevatedButton("Delete", color=ft.Colors.ERROR, on_click=delete),
+                ft.Button("Delete", color=ft.Colors.ERROR, on_click=delete),
             ],
         )
         open_dialog(self.page, dialog)

@@ -102,6 +102,15 @@ Be concise but thorough. Use tools when appropriate."""
     gateway_port: int = 8080
     push_notifications_enabled: bool = True
 
+    # Runtime backend: local embedded agent or a Desktop-compatible Hermes
+    # remote backend (``hermes serve`` / dashboard JSON-RPC gateway).
+    runtime_mode: str = "local"
+    remote_url: str = ""
+    remote_auth_mode: str = "auto"
+    remote_username: str = ""
+    remote_profile: str = ""
+    remote_allow_insecure: bool = False
+
     # UI settings
     theme: str = "system"  # light, dark, system
     language: str = "en"
@@ -168,6 +177,12 @@ Be concise but thorough. Use tools when appropriate."""
         "gateway_enabled",
         "gateway_port",
         "push_notifications_enabled",
+        "runtime_mode",
+        "remote_url",
+        "remote_auth_mode",
+        "remote_username",
+        "remote_profile",
+        "remote_allow_insecure",
         "theme",
         "language",
         "font_size",

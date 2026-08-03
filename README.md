@@ -4,13 +4,14 @@ A mobile AI agent for Android, built with Python and Flet. Ports the Hermes Desk
 
 ## Features
 
-- **AI Agent Core** - Full tool-calling agent with streaming responses (14 built-in tools)
-- **Chat Interface** - Material 3 mobile-first UI with markdown, tool call display, and streaming
+- **AI Agent Core** - Full tool-calling agent with streaming responses and 41 mobile-executable tool handlers
+- **Chat Interface** - Mobile Nous interface derived from Hermes Desktop, with markdown, tool calls, and streaming
 - **9 AI Providers** - OpenRouter, OpenAI, Anthropic, Google/Gemini, Groq, Together, DeepSeek, xAI, Ollama
 - **Memory** - SQLite-based conversation memory with Fernet encryption and TTL expiration
 - **Skills** - Plugin system for extending capabilities (Python file or package skills)
 - **28 Toolsets** - Categorized tool groupings mirroring Hermes Desktop
-- **Gateway** - Code-based pairing + Telegram bot adapter for remote access
+- **Hermes Remote** - Connect to a full `hermes serve` backend with authenticated JSON-RPC streaming and resumable sessions
+- **Messaging Gateway** - Code-based pairing + Telegram bot adapter for access to the local mobile runtime
 - **Scheduler** - Cron job system for automated tasks (cleanup, backup, sync, updates)
 - **i18n** - English and Portuguese (pt-br) with dot-notation translation
 - **Prompt Caching** - Cost savings via cache breakpoints (~90% on system prompt)
@@ -51,6 +52,7 @@ hermes_mobile/
 ├── providers/                  # 9 ProviderProfile configurations
 ├── cron/                       # Scheduler + 4 default jobs
 ├── gateway/                    # Pairing, Telegram adapter, platform adapters
+├── remote/                     # Desktop-compatible REST/auth/WebSocket client
 ├── plugins/                    # ABC-based plugin registry
 ├── locales/                    # en.json, pt-br.json i18n
 └── ui/                         # 8 Flet views
@@ -67,14 +69,33 @@ hermes_mobile/
 | `THEME` | system | light, dark, system |
 | `LANGUAGE` | en | en or pt-br |
 
+## Hermes Remote
+
+Open **Connections → Hermes Remote**, select **Remote**, and configure the URL of a
+running Hermes backend. The mobile client uses the same protocol as Hermes Desktop:
+
+1. `GET /api/status` discovers version and authentication providers.
+2. Basic login or a session token authenticates without embedding credentials in the URL.
+3. A one-time WebSocket ticket opens `/api/ws`.
+4. JSON-RPC creates, lists, resumes, submits, and interrupts Hermes sessions.
+
+Passwords and tokens are stored in the app-private encrypted credential store, never in
+the persisted settings JSON. HTTPS is required for public hosts. Plain HTTP is accepted
+automatically only for loopback, private LAN, `.local`, and Tailscale addresses; public
+insecure transport requires explicit opt-in.
+
+**Hermes Remote** and **Messaging Gateway** are separate: Remote makes the phone a client
+of a full Hermes backend, while Messaging Gateway exposes the phone's local runtime to
+configured chat platforms.
+
 ## Building APK
 
 ```bash
-pip install ".[android]"
-flet build apk
-# or
-buildozer -v android debug
+./scripts/build_android.sh
 ```
+
+The script owns the Flet exclusions and reproducible Android build contract. The APK is
+written to `build/apk/hermes-mobile.apk`.
 
 ## Skills
 

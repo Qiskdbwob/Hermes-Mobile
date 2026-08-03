@@ -7,6 +7,7 @@ status rows instead of boxed cards.
 """
 
 import asyncio
+import inspect
 import logging
 from typing import Dict, List, Optional
 
@@ -14,7 +15,7 @@ import flet as ft
 
 from hermes_mobile.core.agent import Message, ToolCall
 from hermes_mobile.locales import t
-from hermes_mobile.ui.common import MONO_FONT, brand_mark
+from hermes_mobile.ui.common import MONO_FONT, brand_mark, close_dialog, open_dialog, snack
 from hermes_mobile.ui.theme import mode_colors
 
 logger = logging.getLogger(__name__)
@@ -86,14 +87,34 @@ class ChatView:
             self._show_welcome()
 
         c = mode_colors(self.app.dark_mode)
-        model = getattr(self.app.settings, "default_model", "")
-        short_model = model.split("/")[-1] if model else t("chat.choose_model")
-
-        context_menu = ft.PopupMenuButton(
-            icon=ft.Icons.ADD,
-            icon_color=c["muted_foreground"],
-            tooltip=t("chat.add_context"),
-            items=[
+        remote_mode = bool(getattr(self.app, "remote_mode", False))
+        if remote_mode:
+            model = str(getattr(self.app, "remote_model", "") or "")
+            short_model = model.split("/")[-1] if model else "Hermes Remote"
+            state = self.app.remote_client.state if self.app.remote_client else "closed"
+            dot_color = {
+                "open": c["success"],
+                "connecting": ft.Colors.ORANGE,
+                "error": ft.Colors.ERROR,
+            }.get(state, c["muted_foreground"])
+            context_items = [
+                ft.PopupMenuItem(
+                    icon=ft.Icons.HISTORY,
+                    content="Remote sessions",
+                    on_click=lambda e: asyncio.create_task(self.app.show_remote_sessions()),
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.HUB_OUTLINED,
+                    content="Connections",
+                    on_click=lambda e: self.app._navigate_to("gateway"),
+                ),
+            ]
+            model_destination = "gateway"
+        else:
+            model = getattr(self.app.settings, "default_model", "")
+            short_model = model.split("/")[-1] if model else t("chat.choose_model")
+            dot_color = c["success"]
+            context_items = [
                 ft.PopupMenuItem(
                     icon=ft.Icons.ATTACH_FILE,
                     content="Artifacts",
@@ -109,7 +130,14 @@ class ChatView:
                     content="Tools",
                     on_click=lambda e: self.app._navigate_to("tools"),
                 ),
-            ],
+            ]
+            model_destination = "settings"
+
+        context_menu = ft.PopupMenuButton(
+            icon=ft.Icons.ADD,
+            icon_color=c["muted_foreground"],
+            tooltip=t("chat.add_context"),
+            items=context_items,
         )
         model_pill = ft.Container(
             content=ft.Row(
@@ -117,7 +145,7 @@ class ChatView:
                     ft.Container(
                         width=6,
                         height=6,
-                        bgcolor=c["success"],
+                        bgcolor=dot_color,
                         border_radius=ft.BorderRadius.all(6),
                     ),
                     ft.Text(
@@ -134,7 +162,7 @@ class ChatView:
             padding=ft.Padding.symmetric(horizontal=9, vertical=5),
             border=ft.Border.all(1, c["border"]),
             border_radius=ft.BorderRadius.all(12),
-            on_click=lambda e: self.app._navigate_to("settings"),
+            on_click=lambda e: self.app._navigate_to(model_destination),
             ink=True,
             tooltip=t("chat.model_settings"),
         )
@@ -143,6 +171,7 @@ class ChatView:
             content=ft.Column(
                 [
                     self.input_field,
+                    self.status_text,
                     ft.Row(
                         [
                             context_menu,
@@ -179,6 +208,7 @@ class ChatView:
     def _show_welcome(self):
         """Show the welcome state in the chat list."""
         c = mode_colors(self.app.dark_mode)
+        remote_mode = bool(getattr(self.app, "remote_mode", False))
         has_api_key = bool(
             self.app.settings
             and (
@@ -189,7 +219,13 @@ class ChatView:
             )
         )
 
-        if has_api_key:
+        if remote_mode:
+            state = self.app.remote_client.state if self.app.remote_client else "closed"
+            subtitle_key = (
+                "chat.remote_ready_help" if state == "open" else "chat.remote_offline_help"
+            )
+            subtitle = t(subtitle_key)
+        elif has_api_key:
             subtitle = t("chat.ready_help")
         else:
             subtitle = t("chat.no_api_key_hint")
@@ -231,6 +267,14 @@ class ChatView:
 
         self.chat_list.controls.append(welcome)
 
+    def refresh_welcome(self):
+        """Rebuild the empty state when runtime connectivity changes."""
+        if self.messages:
+            return
+        self.chat_list.controls.clear()
+        self._show_welcome()
+        self.page.update()
+
     # ------------------------------------------------------------------
     # Sending
     # ------------------------------------------------------------------
@@ -238,6 +282,7 @@ class ChatView:
     def _on_send(self, e):
         """Submit one turn; concurrent sends are rejected visibly."""
         if self._sending:
+            asyncio.create_task(self.app.interrupt_turn())
             return
         text = self.input_field.value
         if text and text.strip():
@@ -249,10 +294,145 @@ class ChatView:
         """Synchronize composer affordances with the active agent turn."""
         self._sending = busy
         self.input_field.disabled = busy
-        self.send_button.disabled = busy
-        self.send_button.icon = ft.Icons.MORE_HORIZ if busy else ft.Icons.ARROW_UPWARD
-        self.send_button.tooltip = t("chat.working") if busy else t("chat.send")
+        self.send_button.disabled = False
+        self.send_button.icon = ft.Icons.STOP_ROUNDED if busy else ft.Icons.ARROW_UPWARD
+        self.send_button.tooltip = "Stop" if busy else t("chat.send")
         self.page.update()
+
+    def set_status(self, text: str):
+        """Show the backend's current operational state below the composer."""
+        value = str(text or "").strip()
+        self.status_text.value = value
+        self.status_text.visible = bool(value)
+        self.page.update()
+
+    def show_remote_request(self, event):
+        """Resolve a blocking Hermes remote prompt without stalling the agent."""
+        client = self.app.remote_client
+        if client is None:
+            return
+        payload = event.payload
+        request_id = str(payload.get("request_id") or "")
+        title = "Hermes needs input"
+        content_controls: list[ft.Control] = []
+        actions: list[ft.Control] = []
+
+        async def submit(coro, dialog):
+            try:
+                await coro
+                close_dialog(self.page, dialog)
+            except Exception as exc:
+                snack(self.page, str(exc), error=True)
+
+        if event.type == "approval.request":
+            title = "Approve remote command?"
+            command = str(payload.get("command") or payload.get("description") or "")
+            description = str(payload.get("description") or "")
+            content_controls = [
+                ft.Text(description, size=13)
+                if description and description != command
+                else ft.Container(),
+                ft.Container(
+                    content=ft.Text(command, selectable=True, font_family=MONO_FONT, size=12),
+                    padding=ft.Padding.all(10),
+                    bgcolor=mode_colors(self.app.dark_mode)["muted"],
+                    border_radius=ft.BorderRadius.all(8),
+                ),
+            ]
+            dialog = ft.AlertDialog(modal=True)
+
+            def respond(choice):
+                return lambda e: asyncio.create_task(
+                    submit(client.respond_approval(choice), dialog)
+                )
+
+            actions = [
+                ft.TextButton("Deny", on_click=respond("deny")),
+                ft.TextButton("Allow once", on_click=respond("once")),
+            ]
+            if payload.get("allow_permanent", payload.get("allowPermanent", True)):
+                actions.append(ft.TextButton("Always allow", on_click=respond("always")))
+        elif event.type == "clarify.request":
+            title = str(payload.get("question") or "Hermes needs clarification")
+            choices = [str(item) for item in payload.get("choices") or []]
+            multi_select = bool(payload.get("multi_select"))
+            answer_field = ft.TextField(
+                hint_text="Your answer",
+                multiline=not choices,
+                min_lines=1,
+                max_lines=4,
+                autofocus=True,
+            )
+            selected: dict[str, ft.Checkbox] = {}
+            radio = None
+            if choices and multi_select:
+                selected = {choice: ft.Checkbox(label=choice) for choice in choices}
+                content_controls = list(selected.values())
+            elif choices:
+                radio = ft.RadioGroup(
+                    content=ft.Column([ft.Radio(value=choice, label=choice) for choice in choices])
+                )
+                content_controls = [radio]
+            else:
+                content_controls = [answer_field]
+            dialog = ft.AlertDialog(modal=True)
+
+            def answer_value():
+                if selected:
+                    return [choice for choice, control in selected.items() if control.value]
+                if radio is not None:
+                    return radio.value
+                return answer_field.value or ""
+
+            actions = [
+                ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
+                ft.TextButton(
+                    "Send",
+                    on_click=lambda e: asyncio.create_task(
+                        submit(client.respond_clarify(request_id, answer_value()), dialog)
+                    ),
+                ),
+            ]
+        else:
+            is_sudo = event.type == "sudo.request"
+            title = "Sudo password" if is_sudo else str(payload.get("prompt") or "Secret required")
+            secret_field = ft.TextField(
+                hint_text="Password" if is_sudo else "Secret value",
+                password=True,
+                can_reveal_password=True,
+                autofocus=True,
+            )
+            content_controls = [
+                ft.Text(
+                    "Sent only to the connected Hermes backend and never saved on this device.",
+                    size=12,
+                    color=mode_colors(self.app.dark_mode)["muted_foreground"],
+                ),
+                secret_field,
+            ]
+            dialog = ft.AlertDialog(modal=True)
+
+            def send_secret():
+                value = secret_field.value or ""
+                if is_sudo:
+                    return client.respond_sudo(request_id, value)
+                return client.respond_secret(request_id, value)
+
+            actions = [
+                ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
+                ft.TextButton(
+                    "Send",
+                    on_click=lambda e: asyncio.create_task(submit(send_secret(), dialog)),
+                ),
+            ]
+
+        dialog.title = ft.Text(title)
+        dialog.content = ft.Container(
+            content=ft.Column(content_controls, tight=True, scroll=ft.ScrollMode.AUTO),
+            width=420,
+        )
+        dialog.actions = actions
+        open_dialog(self.page, dialog)
 
     # ------------------------------------------------------------------
     # Message lifecycle
@@ -260,8 +440,11 @@ class ChatView:
 
     def add_user_message(self, text: str):
         """Add a user message to the chat"""
+        first_message = not self.messages
         message = Message.user(text)
         self.messages.append(message)
+        if first_message:
+            self.chat_list.controls.clear()
         self._add_message_bubble(message)
         self._scroll_to_bottom()
 
@@ -420,9 +603,7 @@ class ChatView:
 
         # Replace the spinner with a status icon
         row.controls[-1] = ft.Icon(
-            ft.Icons.CHECK_CIRCLE_OUTLINE
-            if not tool_call.error
-            else ft.Icons.ERROR_OUTLINE,
+            ft.Icons.CHECK_CIRCLE_OUTLINE if not tool_call.error else ft.Icons.ERROR_OUTLINE,
             size=15,
             color=ft.Colors.PRIMARY if not tool_call.error else ft.Colors.ERROR,
         )
@@ -501,9 +682,33 @@ class ChatView:
     def _scroll_to_bottom(self):
         """Scroll chat to bottom"""
         try:
-            self.chat_list.scroll_to(offset=-1, duration=120)
+            result = self.chat_list.scroll_to(offset=-1, duration=120)
+            if inspect.isawaitable(result):
+                try:
+                    asyncio.get_running_loop().create_task(result)
+                except RuntimeError:
+                    # Structural tests build controls without Flet's event loop.
+                    result.close()
         except Exception:
             pass
+
+    def load_remote_history(self, messages):
+        """Hydrate a resumed Desktop session into the mobile transcript."""
+        self.clear_chat(show_welcome=False)
+        for item in messages or []:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "assistant")
+            content = str(item.get("content") or item.get("text") or "")
+            if not content or role not in {"user", "assistant"}:
+                continue
+            message = Message(role=role, content=content)
+            self.messages.append(message)
+            self._add_message_bubble(message)
+        if not self.messages:
+            self._show_welcome()
+        self._scroll_to_bottom()
+        self.page.update()
 
     def clear_chat(self, show_welcome: bool = True):
         """Start a clean session in both the UI and agent runtime."""

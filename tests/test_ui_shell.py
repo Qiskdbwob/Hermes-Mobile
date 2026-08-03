@@ -10,6 +10,7 @@ import flet as ft
 from hermes_mobile.core.agent import Message
 from hermes_mobile.main import HermesMobileApp
 from hermes_mobile.ui.chat_view import ChatView
+from hermes_mobile.ui.gateway_view import GatewayView
 from hermes_mobile.ui.tools_view import ToolsView
 
 
@@ -111,6 +112,84 @@ def test_chat_has_single_shell_header_and_desktop_derived_composer():
     assert view.send_button.bgcolor == "#FFE6CB"
 
 
+def test_remote_composer_shows_backend_state_and_remote_destinations():
+    app = fake_app()
+    app.remote_mode = True
+    app.remote_model = "openai/gpt-5.6-sol"
+    app.remote_client = SimpleNamespace(state="open")
+    app.show_remote_sessions = lambda: None
+    root = ChatView(app).build()
+
+    texts = [
+        control.value
+        for control in walk_controls(root)
+        if isinstance(control, ft.Text) and control.value
+    ]
+    assert "gpt-5.6-sol" in texts
+    assert "Hermes Remote" not in texts
+    assert "Connected to Hermes Remote. Send a message to start." in texts
+    assert "Go to Settings > API Key to configure." not in texts
+
+    app.remote_client.state = "closed"
+    view = ChatView(app)
+    view.build()
+    app.remote_client.state = "open"
+    view.refresh_welcome()
+    refreshed = [
+        control.value
+        for control in walk_controls(view.chat_list)
+        if isinstance(control, ft.Text) and control.value
+    ]
+    assert "Connected to Hermes Remote. Send a message to start." in refreshed
+    assert "Hermes Remote is offline. Open Connections to reconnect." not in refreshed
+
+    view.add_user_message("First turn")
+    after_first_turn = [
+        control.value
+        for control in walk_controls(view.chat_list)
+        if isinstance(control, ft.Text) and control.value
+    ]
+    assert "First turn" in after_first_turn
+    assert "Connected to Hermes Remote. Send a message to start." not in after_first_turn
+
+
+def test_connections_surface_separates_remote_from_messaging_gateway():
+    app = fake_app()
+    app.remote_mode = True
+    app.remote_model = ""
+    app.remote_client = SimpleNamespace(state="open")
+    app.remote_status = SimpleNamespace(version="0.19.1")
+    app.remote_secret_store = SimpleNamespace(load=lambda: {}, save=lambda **kwargs: None)
+    app.settings.runtime_mode = "remote"
+    app.settings.remote_url = "http://100.98.210.62:9119"
+    app.settings.remote_auth_mode = "basic"
+    app.settings.remote_username = "joao"
+    app.settings.remote_profile = ""
+    app.settings.remote_allow_insecure = False
+    app.settings.save = lambda: None
+    app.gateway_manager = SimpleNamespace(
+        _running=False,
+        config=SimpleNamespace(
+            enabled=False,
+            port=8080,
+            platforms={},
+            pairing_enabled=True,
+        ),
+    )
+    root = GatewayView(app).build()
+
+    texts = [
+        str(control.value)
+        for control in walk_controls(root)
+        if isinstance(control, ft.Text) and control.value
+    ]
+    assert "HERMES REMOTE" in texts
+    assert "MESSAGING GATEWAY" in texts
+    assert "Hermes 0.19.1" in texts
+    assert not any(isinstance(control, ft.Card) for control in walk_controls(root))
+    assert not any(isinstance(control, ft.ElevatedButton) for control in walk_controls(root))
+
+
 def test_new_session_clears_ui_and_agent_synchronously():
     app = fake_app()
     view = ChatView(app)
@@ -132,8 +211,10 @@ def test_busy_state_prevents_duplicate_turns_and_recovers():
 
     view.set_busy(True)
     assert view.input_field.disabled is True
-    assert view.send_button.disabled is True
-    assert view.send_button.icon == ft.Icons.MORE_HORIZ
+    # Match Desktop: the composer is locked but the send affordance stays
+    # available as an explicit interrupt button.
+    assert view.send_button.disabled is False
+    assert view.send_button.icon == ft.Icons.STOP_ROUNDED
 
     view.set_busy(False)
     assert view.input_field.disabled is False

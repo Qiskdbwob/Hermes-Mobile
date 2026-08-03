@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+from datetime import datetime
 
 import flet as ft
 
@@ -18,10 +19,11 @@ from hermes_mobile.gateway.mobile_gateway import (
 from hermes_mobile.locales import t
 from hermes_mobile.memory.provider import MobileMemoryProvider
 from hermes_mobile.plugins import get_plugin_registry
+from hermes_mobile.remote import RemoteEvent, RemoteHermesClient, RemoteSecretStore
 from hermes_mobile.skills.manager import MobileSkillManager
 from hermes_mobile.ui.artifacts_view import ArtifactsView
 from hermes_mobile.ui.chat_view import ChatView
-from hermes_mobile.ui.common import brand_mark, snack, status_dot
+from hermes_mobile.ui.common import brand_mark, close_dialog, open_dialog, snack, status_dot
 from hermes_mobile.ui.cron_view import CronView
 from hermes_mobile.ui.gateway_view import GatewayView
 from hermes_mobile.ui.kanban_view import KanbanView
@@ -67,6 +69,12 @@ class HermesMobileApp:
         self.skill_manager: MobileSkillManager = None
         self.gateway_manager: GatewayManager = None
         self.plugin_registry = None
+        self.remote_client: RemoteHermesClient | None = None
+        self.remote_status = None
+        self.remote_model = ""
+        self.remote_secret_store: RemoteSecretStore | None = None
+        self._remote_tool_calls: dict[str, ToolCall] = {}
+        self._active_local_turn: asyncio.Task | None = None
 
         # UI Components
         self.chat_view: ChatView = None
@@ -111,6 +119,12 @@ class HermesMobileApp:
             self.error_message = f"UI build error: {e}"
             self._show_error_screen()
 
+        if self.remote_mode:
+            try:
+                asyncio.get_running_loop().create_task(self.connect_remote())
+            except RuntimeError:
+                logger.warning("Remote auto-connect deferred: no running event loop")
+
     def _setup_page(self):
         """Configure the Flet page"""
         self.page.title = "Hermes Mobile"
@@ -150,9 +164,7 @@ class HermesMobileApp:
         platform_name = str(getattr(raw_platform, "value", raw_platform)).lower()
         width = float(getattr(event, "width", 0) or getattr(self.page, "width", 0) or 0)
         force_mobile = os.environ.get("HERMES_MOBILE_LAYOUT", "").lower() == "mobile"
-        should_be_mobile = force_mobile or platform_name in ("android", "ios") or (
-            0 < width < 768
-        )
+        should_be_mobile = force_mobile or platform_name in ("android", "ios") or (0 < width < 768)
         if should_be_mobile == self.is_mobile or self.chat_view is None:
             return
 
@@ -163,6 +175,11 @@ class HermesMobileApp:
         if active_view != "chat":
             self._switch_view(active_view)
         self.page.update()
+
+    @property
+    def remote_mode(self) -> bool:
+        """Whether chat should execute on the configured remote Hermes backend."""
+        return bool(self.settings and getattr(self.settings, "runtime_mode", "local") == "remote")
 
     @property
     def dark_mode(self) -> bool:
@@ -183,6 +200,7 @@ class HermesMobileApp:
             db_path=self.settings.get_memory_db_path(),
             encrypt=self.settings.encrypt_memory,
         )
+        self.remote_secret_store = RemoteSecretStore(self.settings.get_data_dir())
 
         # Initialize skill manager
         self.skill_manager = MobileSkillManager(
@@ -345,9 +363,13 @@ class HermesMobileApp:
     def _build_app_bar(self) -> ft.Control:
         """Build one compact mobile shell header — no duplicate chat header."""
         c = mode_colors(self.dark_mode)
-        provider = getattr(self.settings, "default_provider", "openrouter")
-        model = getattr(self.settings, "default_model", "")
-        short_model = model.split("/")[-1] if model else t("chat.model_not_configured")
+        if self.remote_mode:
+            provider = "Remote"
+            short_model = "connecting"
+        else:
+            provider = getattr(self.settings, "default_provider", "openrouter")
+            model = getattr(self.settings, "default_model", "")
+            short_model = model.split("/")[-1] if model else t("chat.model_not_configured")
 
         self._gateway_indicator = status_dot(
             c["muted_foreground"],
@@ -367,6 +389,11 @@ class HermesMobileApp:
             icon_color=c["muted_foreground"],
             tooltip=t("nav.more"),
             items=[
+                ft.PopupMenuItem(
+                    icon=ft.Icons.HISTORY,
+                    content="Remote sessions",
+                    on_click=lambda e: asyncio.create_task(self.show_remote_sessions()),
+                ),
                 ft.PopupMenuItem(
                     icon=ft.Icons.BUILD_OUTLINED,
                     content=t("nav.tools"),
@@ -462,7 +489,7 @@ class HermesMobileApp:
                         text_align=ft.TextAlign.CENTER,
                     ),
                     ft.Container(height=20),
-                    ft.ElevatedButton(
+                    ft.Button(
                         "Retry",
                         icon=ft.Icons.REFRESH,
                         on_click=self._retry_initialization,
@@ -554,13 +581,20 @@ class HermesMobileApp:
         if not self.is_mobile or not hasattr(self, "_app_bar_title"):
             return
         if view == "chat":
-            provider = getattr(self.settings, "default_provider", "openrouter")
-            model = getattr(self.settings, "default_model", "")
             self._app_bar_title.visible = True
             self._app_bar_subtitle.visible = True
             self._app_bar_title.value = t("chat.new_session")
-            short_model = model.split("/")[-1] if model else t("chat.model_not_configured")
-            self._app_bar_subtitle.value = f"{provider} · {short_model}"
+            if self.remote_mode:
+                state = self.remote_client.state if self.remote_client else "offline"
+                version = getattr(self.remote_status, "version", "")
+                model = str(self.remote_model or "")
+                detail = model.split("/")[-1] if model else (version or state)
+                self._app_bar_subtitle.value = f"Remote · {detail}"
+            else:
+                provider = getattr(self.settings, "default_provider", "openrouter")
+                model = getattr(self.settings, "default_model", "")
+                short_model = model.split("/")[-1] if model else t("chat.model_not_configured")
+                self._app_bar_subtitle.value = f"{provider} · {short_model}"
         else:
             # Operational pages own their visible heading and actions. Keeping a
             # second title in the shell wastes scarce phone height and reads as
@@ -569,10 +603,272 @@ class HermesMobileApp:
             self._app_bar_subtitle.visible = False
         self._new_session_button.visible = view == "chat"
 
+    async def show_remote_sessions(self):
+        """Show and resume human-facing sessions from the remote state database."""
+        if not self.remote_mode:
+            snack(self.page, "Select Remote runtime in Connections first", error=True)
+            self._navigate_to("gateway")
+            return
+        if self.remote_client is None or self.remote_client.state != "open":
+            if not await self.connect_remote(announce=True):
+                return
+        client = self.remote_client
+        if client is None:
+            return
+        try:
+            sessions = await client.list_sessions(limit=50)
+        except Exception as exc:
+            snack(self.page, str(exc), error=True)
+            return
+
+        c = mode_colors(self.dark_mode)
+        dialog = ft.AlertDialog(modal=True)
+        rows: list[ft.Control] = []
+        for item in sessions:
+            session_id = str(item.get("id") or "")
+            if not session_id:
+                continue
+            title = str(item.get("title") or "Untitled session")
+            preview = str(item.get("preview") or "").replace("\n", " ")
+            started = item.get("started_at") or 0
+            try:
+                stamp = datetime.fromtimestamp(float(started)).strftime("%b %d · %H:%M")
+            except (TypeError, ValueError, OSError):
+                stamp = ""
+            rows.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Icon(ft.Icons.CHAT_BUBBLE_OUTLINE, size=18),
+                            ft.Column(
+                                [
+                                    ft.Text(
+                                        title,
+                                        size=14,
+                                        weight=ft.FontWeight.W_600,
+                                        max_lines=1,
+                                        overflow=ft.TextOverflow.ELLIPSIS,
+                                    ),
+                                    ft.Text(
+                                        preview or stamp,
+                                        size=11,
+                                        color=c["muted_foreground"],
+                                        max_lines=1,
+                                        overflow=ft.TextOverflow.ELLIPSIS,
+                                    ),
+                                ],
+                                spacing=1,
+                                expand=True,
+                            ),
+                            ft.Text(stamp, size=10, color=c["muted_foreground"]),
+                        ],
+                        spacing=10,
+                    ),
+                    padding=ft.Padding.symmetric(horizontal=4, vertical=10),
+                    border=ft.Border.only(bottom=ft.BorderSide(1, c["border"])),
+                    on_click=lambda e, sid=session_id, name=title: asyncio.create_task(
+                        self._resume_remote_session(sid, name, dialog)
+                    ),
+                    ink=True,
+                )
+            )
+        if not rows:
+            rows = [
+                ft.Container(
+                    content=ft.Text("No remote sessions yet", color=c["muted_foreground"]),
+                    padding=ft.Padding.all(20),
+                    alignment=ft.Alignment.CENTER,
+                )
+            ]
+        dialog.title = ft.Text("Remote sessions")
+        dialog.content = ft.Container(
+            content=ft.ListView(controls=rows, spacing=0),
+            width=480,
+            height=min(540, max(180, len(rows) * 62)),
+        )
+        dialog.actions = [
+            ft.TextButton("Close", on_click=lambda e: close_dialog(self.page, dialog))
+        ]
+        open_dialog(self.page, dialog)
+
+    async def _resume_remote_session(self, session_id: str, title: str, dialog):
+        client = self.remote_client
+        if client is None:
+            return
+        try:
+            result = await client.resume_session(session_id)
+        except Exception as exc:
+            snack(self.page, str(exc), error=True)
+            return
+        self.chat_view.load_remote_history(result.get("messages") or [])
+        self._navigate_to("chat")
+        self._app_bar_title.value = title
+        close_dialog(self.page, dialog)
+        self.page.update()
+
+    async def connect_remote(self, announce: bool = False):
+        """Connect chat to the configured Hermes remote backend."""
+        if not self.settings or not self.remote_secret_store:
+            return False
+        remote_url = str(getattr(self.settings, "remote_url", "") or "").strip()
+        if not remote_url:
+            if announce:
+                snack(self.page, "Set a Remote URL first", error=True)
+            return False
+
+        if self.remote_client is not None:
+            await self.remote_client.close()
+        secrets = self.remote_secret_store.load()
+        client = RemoteHermesClient(
+            remote_url,
+            auth_mode=getattr(self.settings, "remote_auth_mode", "auto"),
+            token=secrets.get("token", ""),
+            username=getattr(self.settings, "remote_username", ""),
+            password=secrets.get("password", ""),
+            profile=getattr(self.settings, "remote_profile", ""),
+            timeout=getattr(self.settings, "request_timeout", 120),
+            allow_insecure=getattr(self.settings, "remote_allow_insecure", False),
+            on_event=self._on_remote_event,
+            on_state=self._on_remote_state,
+        )
+        self.remote_client = client
+        try:
+            self.remote_status = await client.connect()
+        except Exception as exc:
+            logger.exception("Remote backend connection failed")
+            self._refresh_connection_chrome()
+            if announce:
+                snack(self.page, str(exc), error=True)
+            return False
+        self._refresh_connection_chrome()
+        if announce:
+            version = self.remote_status.version or "unknown version"
+            snack(self.page, f"Connected to Hermes {version}")
+        return True
+
+    async def disconnect_remote(self):
+        """Close the active remote socket without touching the local agent."""
+        if self.remote_client is not None:
+            await self.remote_client.close()
+        self.remote_client = None
+        self.remote_status = None
+        self.remote_model = ""
+        self._remote_tool_calls.clear()
+        self._refresh_connection_chrome()
+
+    async def _on_remote_state(self, state: str):
+        logger.info("Remote Hermes state: %s", state)
+        self._refresh_connection_chrome()
+        if self.chat_view is not None:
+            self.chat_view.refresh_welcome()
+
+    def _refresh_connection_chrome(self):
+        """Reflect actual runtime connectivity in the mobile shell."""
+        if not hasattr(self, "_gateway_indicator"):
+            return
+        c = mode_colors(self.dark_mode)
+        state = self.remote_client.state if self.remote_client else "local"
+        colors = {
+            "open": c["success"],
+            "connecting": ft.Colors.ORANGE,
+            "error": ft.Colors.ERROR,
+            "closed": c["muted_foreground"],
+            "local": c["success"],
+        }
+        self._gateway_indicator.bgcolor = colors.get(state, c["muted_foreground"])
+        self._gateway_indicator.tooltip = (
+            f"Hermes Remote: {state}" if self.remote_mode else "Local agent ready"
+        )
+        if self.current_view == "chat":
+            self._update_app_bar_title("chat")
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _on_remote_event(self, event: RemoteEvent):
+        """Project canonical Desktop gateway events onto the mobile transcript."""
+        client = self.remote_client
+        if event.session_id and client and client.session_id:
+            if event.session_id != client.session_id:
+                return
+        payload = event.payload
+        if event.type == "message.delta":
+            text = str(payload.get("text") or "")
+            if text:
+                self.chat_view.append_assistant_message(text)
+        elif event.type == "message.interim":
+            text = str(payload.get("text") or "")
+            if text:
+                self.chat_view.append_assistant_message(text)
+                self.chat_view.finalize_assistant_message()
+        elif event.type == "message.complete":
+            if not self.chat_view.current_assistant_text:
+                text = str(payload.get("text") or "")
+                if text:
+                    self.chat_view.append_assistant_message(text)
+            self.chat_view.finalize_assistant_message()
+            self.chat_view.set_busy(False)
+            self.chat_view.set_status("")
+        elif event.type == "tool.start":
+            tool_id = str(payload.get("tool_id") or payload.get("id") or "remote-tool")
+            arguments = payload.get("args") if isinstance(payload.get("args"), dict) else {}
+            tool_call = ToolCall(
+                name=str(payload.get("name") or "tool"),
+                arguments=arguments,
+                call_id=tool_id,
+            )
+            self._remote_tool_calls[tool_id] = tool_call
+            self.chat_view.on_tool_call(tool_call)
+        elif event.type == "tool.complete":
+            tool_id = str(payload.get("tool_id") or payload.get("id") or "remote-tool")
+            tool_call = self._remote_tool_calls.get(tool_id)
+            if tool_call is None:
+                tool_call = ToolCall(
+                    name=str(payload.get("name") or "tool"),
+                    arguments=payload.get("args") if isinstance(payload.get("args"), dict) else {},
+                    call_id=tool_id,
+                )
+                self.chat_view.on_tool_call(tool_call)
+            tool_call.result = payload.get("result") or payload.get("preview") or "Completed"
+            if payload.get("error"):
+                tool_call.error = str(payload["error"])
+            self.chat_view.on_tool_result(tool_call)
+        elif event.type == "status.update":
+            self.chat_view.set_status(str(payload.get("text") or payload.get("kind") or ""))
+        elif event.type in {
+            "clarify.request",
+            "approval.request",
+            "secret.request",
+            "sudo.request",
+        }:
+            self.chat_view.show_remote_request(event)
+        elif event.type == "session.info":
+            model = str(payload.get("model") or "")
+            self.remote_model = model
+            title = str(payload.get("title") or "")
+            if title and hasattr(self, "_app_bar_title"):
+                self._app_bar_title.value = title
+            if model and hasattr(self, "_app_bar_subtitle"):
+                self._app_bar_subtitle.value = f"Remote · {model.split('/')[-1]}"
+            self._refresh_connection_chrome()
+        elif event.type == "error":
+            message = str(payload.get("message") or "Remote Hermes error")
+            self.chat_view.append_assistant_message(f"**Error:** {message}")
+            self.chat_view.finalize_assistant_message()
+            self.chat_view.set_busy(False)
+            self.chat_view.set_status("")
+        elif event.type == "background.complete":
+            self.chat_view.set_status(str(payload.get("text") or "Background task complete"))
+
     def _start_new_session(self, e=None):
-        """Create a genuinely clean local agent session."""
+        """Create a genuinely clean local or remote agent session."""
         if self.chat_view is not None:
             self.chat_view.clear_chat(show_welcome=True)
+        if self.remote_client is not None:
+            self.remote_client.session_id = None
+            self.remote_client.stored_session_id = None
+        self._remote_tool_calls.clear()
         self._navigate_to("chat")
         self._app_bar_title.value = t("chat.new_session")
         self.page.update()
@@ -593,22 +889,64 @@ class HermesMobileApp:
             self.chat_view.on_message(message)
 
     async def send_message(self, text: str):
-        """Send one turn and always restore the composer after failures."""
-        if not text.strip() or self.chat_view is None or self.agent is None:
+        """Send one turn through the selected local or remote runtime."""
+        if not text.strip() or self.chat_view is None:
             return
 
         self.chat_view.set_busy(True)
         self.chat_view.add_user_message(text)
+        if self.remote_mode:
+            self.chat_view.set_status("Connecting to Hermes Remote…")
+            try:
+                if self.remote_client is None or self.remote_client.state != "open":
+                    if not await self.connect_remote():
+                        raise RuntimeError("Hermes Remote is not connected")
+                client = self.remote_client
+                if client is None:
+                    raise RuntimeError("Hermes Remote connection was lost")
+                self.chat_view.set_status("Hermes is working…")
+                await client.submit_prompt(text)
+                # message.complete owns finalization and unlocks the composer.
+                return
+            except Exception as exc:
+                logger.exception("Remote conversation turn failed")
+                self.chat_view.append_assistant_message(f"**Remote error:** {exc}")
+                self.chat_view.finalize_assistant_message()
+                self.chat_view.set_busy(False)
+                self.chat_view.set_status("")
+                return
+
+        if self.agent is None:
+            self.chat_view.set_busy(False)
+            return
+        self._active_local_turn = asyncio.current_task()
         try:
             async for chunk in self.agent.run_conversation(text, stream=True):
                 self.chat_view.append_assistant_message(chunk)
             self.chat_view.finalize_assistant_message()
+        except asyncio.CancelledError:
+            self.chat_view.finalize_assistant_message()
+            self.chat_view.set_status("Stopped")
         except Exception as exc:
             logger.exception("Conversation turn failed")
             self.chat_view.append_assistant_message(f"**Error:** {exc}")
             self.chat_view.finalize_assistant_message()
         finally:
+            self._active_local_turn = None
             self.chat_view.set_busy(False)
+
+    async def interrupt_turn(self):
+        """Interrupt the active local task or canonical remote session."""
+        if self.remote_mode and self.remote_client is not None:
+            try:
+                self.chat_view.set_status("Stopping…")
+                await self.remote_client.interrupt()
+            except Exception as exc:
+                snack(self.page, str(exc), error=True)
+            return
+        task = self._active_local_turn
+        if task is not None and not task.done():
+            task.cancel()
 
     def reload_settings(self):
         """Reload settings and reinitialize components"""
@@ -630,6 +968,8 @@ async def main(page: ft.Page):
 
     # Handle window events
     async def on_close(e):
+        if app.remote_client:
+            await app.remote_client.close()
         if app.memory_provider:
             app.memory_provider.close()
         if app.agent and app.agent.memory_provider:
@@ -637,7 +977,14 @@ async def main(page: ft.Page):
         if app.gateway_manager:
             await app.gateway_manager.stop()
 
+    async def on_lifecycle(e):
+        state = str(getattr(e, "state", "")).lower()
+        if "resume" in state and app.remote_mode:
+            if app.remote_client is None or app.remote_client.state != "open":
+                await app.connect_remote()
+
     page.on_close = on_close
+    page.on_app_lifecycle_state_change = on_lifecycle
 
     # Keep the app running
     await asyncio.Event().wait()
