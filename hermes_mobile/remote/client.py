@@ -37,7 +37,7 @@ class RemoteProtocolError(RemoteHermesError):
     """The backend returned an invalid or unsupported protocol response."""
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class RemoteStatus:
     version: str = ""
     auth_required: bool = False
@@ -48,7 +48,7 @@ class RemoteStatus:
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass(frozen=True)
 class RemoteEvent:
     type: str
     payload: Mapping[str, Any]

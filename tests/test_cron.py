@@ -441,6 +441,7 @@ class TestTicker:
 
         original_thread = scheduler._ticker_thread
         original_stop = scheduler._ticker_stop_event
+        original_stop_was_set = original_stop.is_set()
         original_running = scheduler._ticker_running
         scheduler._ticker_stop_event.clear()
         scheduler._ticker_thread = None
@@ -449,6 +450,14 @@ class TestTicker:
         if scheduler._get_jobs_file().exists():
             scheduler._get_jobs_file().unlink()
         yield
+        # Tests may start the real daemon ticker. Join it before restoring
+        # globals or removing temp_dir; otherwise it can recreate heartbeat
+        # files concurrently with TemporaryDirectory cleanup.
+        scheduler.stop_ticker()
+        if original_stop_was_set:
+            original_stop.set()
+        else:
+            original_stop.clear()
         scheduler._ticker_stop_event = original_stop
         scheduler._ticker_thread = original_thread
         scheduler._ticker_running = original_running
