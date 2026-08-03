@@ -32,7 +32,20 @@ def walk_controls(control: ft.Control):
             continue
         seen.add(id(current))
         yield current
-        for name in getattr(type(current), "__dataclass_fields__", {}):
+        fields = set(getattr(type(current), "__dataclass_fields__", {}))
+        fields.update(
+            {
+                "controls",
+                "content",
+                "leading",
+                "trailing",
+                "title",
+                "subtitle",
+                "label",
+                "actions",
+            }
+        )
+        for name in fields:
             try:
                 value = getattr(current, name)
             except Exception:

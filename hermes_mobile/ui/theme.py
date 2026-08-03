@@ -123,7 +123,7 @@ def build_theme(dark: bool = False) -> ft.Theme:
     # Passing the old comma-separated CSS literal made Flutter look for one
     # impossible family name and silently fall back with inconsistent metrics.
     font_family = "Roboto"
-    return ft.Theme(
+    values = dict(
         color_scheme=_scheme(c),
         use_material3=True,
         font_family=font_family,
@@ -175,6 +175,10 @@ def build_theme(dark: bool = False) -> ft.Theme:
             icon_color=c["muted_foreground"],
         ),
     )
+    supported = inspect.signature(ft.Theme).parameters
+    if "card_bgcolor" not in supported and "card_color" in supported:
+        values["card_color"] = values.pop("card_bgcolor")
+    return ft.Theme(**{key: value for key, value in values.items() if key in supported})
 
 
 def mode_colors(dark: bool = False) -> dict:

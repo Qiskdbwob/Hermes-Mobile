@@ -85,7 +85,23 @@ def walk_controls(control: ft.Control):
             continue
         seen.add(id(current))
         yield current
-        fields = getattr(type(current), "__dataclass_fields__", {})
+        fields = set(getattr(type(current), "__dataclass_fields__", {}))
+        # Flet 0.28 controls predate the dataclass control graph used by 0.86.
+        # Include the public composition slots so the same assertions inspect
+        # the rendered tree on both supported generations.
+        fields.update(
+            {
+                "controls",
+                "content",
+                "leading",
+                "trailing",
+                "title",
+                "subtitle",
+                "label",
+                "actions",
+                "tabs",
+            }
+        )
         for name in fields:
             try:
                 value = getattr(current, name)
@@ -188,7 +204,8 @@ def test_connections_surface_separates_remote_from_messaging_gateway():
     assert "MESSAGING GATEWAY" in texts
     assert "Hermes 0.19.1" in texts
     assert not any(isinstance(control, ft.Card) for control in walk_controls(root))
-    assert not any(isinstance(control, ft.ElevatedButton) for control in walk_controls(root))
+    if not issubclass(ft.Button, ft.ElevatedButton):
+        assert not any(isinstance(control, ft.ElevatedButton) for control in walk_controls(root))
 
 
 def test_new_session_clears_ui_and_agent_synchronously():
