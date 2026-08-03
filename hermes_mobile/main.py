@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import os
-from typing import cast
+from typing import Any, cast
 
 import flet as ft
 
@@ -163,7 +163,7 @@ class HermesMobileApp:
         else:
             self.page.theme_mode = ft.ThemeMode.SYSTEM
 
-    def _on_page_resize(self, event: ft.PageResizeEvent):
+    def _on_page_resize(self, event: Any):
         """Swap the shell when a web/desktop viewport crosses the phone breakpoint."""
         raw_platform = getattr(self.page, "platform", "")
         platform_name = str(getattr(raw_platform, "value", raw_platform)).lower()
