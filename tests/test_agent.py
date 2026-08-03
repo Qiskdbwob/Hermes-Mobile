@@ -430,24 +430,26 @@ class TestMobileAgent:
         result = await agent._tool_list_files(".")
         assert isinstance(result, list)
 
-    @patch("hermes_mobile.core.agent.asyncio.create_subprocess_shell")
-    async def test_tool_run_command(self, mock_subprocess):
-        mock_proc = AsyncMock()
-        mock_proc.communicate.return_value = (b"stdout here", b"")
-        mock_proc.returncode = 0
-        mock_subprocess.return_value = mock_proc
+    @patch("hermes_mobile.core.agent.MobileProcessRegistry.terminal")
+    async def test_tool_run_command(self, mock_terminal):
+        mock_terminal.return_value = {"output": "stdout here", "exit_code": 0}
         agent = MobileAgent()
         result = await agent._tool_run_command("echo hello")
         assert result["stdout"] == "stdout here"
         assert result["returncode"] == 0
 
-    @patch("hermes_mobile.core.agent.delegate_parallel_tasks")
-    async def test_tool_delegate_tasks(self, mock_delegate):
-        mock_delegate.return_value = {"results": ["task done"]}
+    async def test_tool_delegate_tasks(self):
         agent = MobileAgent()
+        agent._tool_delegate_task = AsyncMock(  # type: ignore[method-assign]
+            return_value={"status": "completed", "content": "task done"}
+        )
         result = await agent._tool_delegate_tasks(["task1"], context="ctx")
-        assert result == {"results": ["task done"]}
-        mock_delegate.assert_called_once_with(["task1"], context="ctx")
+        assert result == {
+            "status": "completed",
+            "mode": "parallel",
+            "results": [{"status": "completed", "content": "task done"}],
+        }
+        agent._tool_delegate_task.assert_awaited_once_with("task1", context="ctx")
 
     @patch("hermes_mobile.core.agent.clarify_tool")
     async def test_tool_clarify(self, mock_clarify):

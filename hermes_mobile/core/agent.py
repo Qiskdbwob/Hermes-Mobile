@@ -12,7 +12,6 @@ from typing import Any, Callable, Dict, List, Optional
 
 from hermes_mobile.config.settings import get_settings
 from hermes_mobile.core.context_compressor import compress_messages, needs_compression
-from hermes_mobile.core.delegation import delegate_parallel_tasks
 from hermes_mobile.core.prompt_caching import apply_cache_control, supports_caching
 from hermes_mobile.providers import ProviderProfile, get_provider_profile
 from hermes_mobile.tools.agent_tools import (
@@ -50,6 +49,7 @@ from hermes_mobile.tools.media_tools import (
     vision_analyze_tool,
 )
 from hermes_mobile.tools.path_security import validate_and_resolve_path
+from hermes_mobile.tools.process_tools import MobileProcessRegistry
 from hermes_mobile.tools.project_tools import (
     project_create_tool,
     project_list_tool,
@@ -156,6 +156,7 @@ class MobileAgent:
         on_tool_call: Optional[Callable[[ToolCall], None]] = None,
         on_tool_result: Optional[Callable[[ToolCall], None]] = None,
         on_message: Optional[Callable[[Message], None]] = None,
+        blocked_tools: Optional[set[str]] = None,
     ):
         self.settings = get_settings()
         self.model = model or self.settings.default_model
@@ -164,6 +165,8 @@ class MobileAgent:
         self.tools = tools or []
         self.memory_provider = memory_provider
         self.skill_manager = skill_manager
+        self.blocked_tools = frozenset(blocked_tools or ())
+        self.process_registry = MobileProcessRegistry()
 
         # Callbacks for UI updates
         self.on_tool_call = on_tool_call
@@ -498,7 +501,7 @@ class MobileAgent:
 
     @property
     def _builtin_tools(self) -> Dict[str, Callable]:
-        return {
+        tools = {
             "web_search": self._tool_web_search,
             "web_extract": self._tool_web_extract,
             "read_file": self._tool_read_file,
@@ -506,6 +509,8 @@ class MobileAgent:
             "list_files": self._tool_list_files,
             "search_files": self._tool_search_files,
             "patch": self._tool_patch,
+            "terminal": self._tool_terminal,
+            "process": self._tool_process,
             "run_command": self._tool_run_command,
             "execute_code": self._tool_execute_code,
             "get_time": self._tool_get_time,
@@ -537,7 +542,9 @@ class MobileAgent:
             "kanban_unblock": self._tool_kanban_unblock,
             "kanban_comment": self._tool_kanban_comment,
             "delegate_tasks": self._tool_delegate_tasks,
+            "delegate_task": self._tool_delegate_task,
         }
+        return {name: handler for name, handler in tools.items() if name not in self.blocked_tools}
 
     async def _tool_web_search(self, query: str, max_results: int = 5) -> Dict[str, Any]:
         """Search the web using DuckDuckGo."""
@@ -655,23 +662,50 @@ class MobileAgent:
         """List, run, pause or resume cron jobs."""
         return await cronjob_tool(action=action, job_id=job_id)
 
+    async def _tool_terminal(
+        self,
+        command: str,
+        cwd: Optional[str] = None,
+        timeout: Optional[int] = 180,
+        background: bool = False,
+    ) -> Dict[str, Any]:
+        """Run a shell command now or register it as a background process."""
+        return await self.process_registry.terminal(
+            command,
+            cwd=cwd,
+            timeout=timeout,
+            background=background,
+        )
+
+    async def _tool_process(
+        self,
+        action: str,
+        session_id: Optional[str] = None,
+        data: Optional[str] = None,
+        timeout: Optional[int] = None,
+        offset: Optional[int] = None,
+        limit: int = 200,
+    ) -> Dict[str, Any]:
+        """Inspect or control a process started by the terminal tool."""
+        return await self.process_registry.process(
+            action,
+            session_id=session_id,
+            data=data,
+            timeout=timeout,
+            offset=offset,
+            limit=limit,
+        )
+
     async def _tool_run_command(self, command: str, cwd: Optional[str] = None) -> Dict[str, Any]:
-        """Run a shell command"""
-        try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                cwd=cwd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-            return {
-                "stdout": stdout.decode(),
-                "stderr": stderr.decode(),
-                "returncode": proc.returncode,
-            }
-        except Exception as e:
-            return {"error": str(e)}
+        """Compatibility wrapper for the original foreground terminal API."""
+        result = await self._tool_terminal(command, cwd=cwd)
+        if "error" in result:
+            return {"error": result["error"], "stdout": result.get("output", "")}
+        return {
+            "stdout": result.get("output", ""),
+            "stderr": "",
+            "returncode": result.get("exit_code"),
+        }
 
     async def _tool_get_time(self) -> str:
         """Get current time"""
@@ -785,11 +819,63 @@ class MobileAgent:
         """Comment on a kanban task."""
         return await kanban_comment_tool(task_id=task_id, text=text)
 
+    async def _tool_delegate_task(
+        self,
+        goal: str,
+        context: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Run one task in an isolated child agent with recursion blocked."""
+        goal = goal.strip()
+        if not goal:
+            return {"error": "Goal is required"}
+
+        tool_calls: List[str] = []
+
+        def record_tool_call(call: ToolCall) -> None:
+            tool_calls.append(call.name)
+
+        child = MobileAgent(
+            model=self.model,
+            provider=self.provider,
+            system_prompt=(
+                f"{self.system_prompt}\n\n"
+                "You are an isolated mobile subagent. Complete only the delegated goal, "
+                "use available tools when needed, and return a concise evidence-based result."
+            ),
+            memory_provider=None,
+            skill_manager=self.skill_manager,
+            on_tool_call=record_tool_call,
+            blocked_tools={"delegate_task", "delegate_tasks", "clarify", "cronjob", "memory"},
+        )
+        child.max_iterations = self.max_iterations
+        prompt = goal if not context else f"Context:\n{context}\n\nGoal:\n{goal}"
+        chunks: List[str] = []
+        try:
+            async for chunk in child.run_conversation(prompt, stream=True):
+                chunks.append(chunk)
+        except Exception as exc:
+            return {"status": "failed", "goal": goal, "error": str(exc)}
+        return {
+            "status": "completed",
+            "goal": goal,
+            "content": "".join(chunks),
+            "tool_calls": tool_calls,
+            "session_id": child.session_id,
+        }
+
     async def _tool_delegate_tasks(
         self, tasks: List[str], context: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Run multiple independent tasks in parallel using subagents."""
-        return await delegate_parallel_tasks(tasks, context=context)
+        """Run up to three independent child agents concurrently."""
+        goals = [task.strip() for task in tasks if task.strip()]
+        if not goals:
+            return {"error": "At least one task is required"}
+        if len(goals) > 3:
+            return {"error": "At most three tasks can run concurrently"}
+        results = await asyncio.gather(
+            *(self._tool_delegate_task(goal, context=context) for goal in goals)
+        )
+        return {"status": "completed", "mode": "parallel", "results": results}
 
     async def _tool_calculate(self, expression: str) -> Any:
         """Calculate a mathematical expression safely."""
@@ -860,6 +946,62 @@ class MobileAgent:
                                     "default": ".",
                                 },
                             },
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "terminal",
+                        "description": "Run a shell command in foreground or background",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "command": {"type": "string", "description": "Command to run"},
+                                "cwd": {"type": "string", "description": "Working directory"},
+                                "timeout": {
+                                    "type": "integer",
+                                    "description": "Foreground timeout in seconds",
+                                    "default": 180,
+                                },
+                                "background": {
+                                    "type": "boolean",
+                                    "description": "Return a process session immediately",
+                                    "default": False,
+                                },
+                            },
+                            "required": ["command"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "process",
+                        "description": "Inspect or control a background terminal process",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "action": {
+                                    "type": "string",
+                                    "enum": [
+                                        "list",
+                                        "poll",
+                                        "log",
+                                        "wait",
+                                        "kill",
+                                        "write",
+                                        "submit",
+                                        "close",
+                                    ],
+                                },
+                                "session_id": {"type": "string"},
+                                "data": {"type": "string"},
+                                "timeout": {"type": "integer"},
+                                "offset": {"type": "integer"},
+                                "limit": {"type": "integer", "default": 200},
+                            },
+                            "required": ["action"],
                         },
                     },
                 },
@@ -1335,6 +1477,24 @@ class MobileAgent:
                 {
                     "type": "function",
                     "function": {
+                        "name": "delegate_task",
+                        "description": "Run one goal in an isolated child agent",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "goal": {"type": "string", "description": "Goal to complete"},
+                                "context": {
+                                    "type": "string",
+                                    "description": "Optional background context",
+                                },
+                            },
+                            "required": ["goal"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
                         "name": "delegate_tasks",
                         "description": "Run multiple independent tasks in parallel "
                         "using subagents (max 3)",
@@ -1363,7 +1523,11 @@ class MobileAgent:
             for skill in self.skill_manager.get_active_skills():
                 schemas.append(skill.get_schema())
 
-        return schemas
+        return [
+            schema
+            for schema in schemas
+            if schema.get("function", {}).get("name") not in self.blocked_tools
+        ]
 
     def set_tools(self, tools: List[Dict[str, Any]]):
         """Set available tools"""
