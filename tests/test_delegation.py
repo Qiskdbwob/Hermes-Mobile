@@ -2,14 +2,12 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from hermes_mobile.core.delegation import (
     MAX_CONCURRENT_SUBAGENTS,
     SUBAGENT_TIMEOUT,
-    delegate_task,
-    delegate_parallel_tasks,
     _quick_tool_call,
+    delegate_parallel_tasks,
+    delegate_task,
 )
 
 

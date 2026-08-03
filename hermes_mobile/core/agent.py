@@ -765,9 +765,7 @@ class MobileAgent:
         self, image_url: str, question: str = "Describe this image in detail."
     ) -> Dict[str, Any]:
         """Analyze an image with a vision model."""
-        return await vision_analyze_tool(
-            image_url=image_url, question=question, agent=self
-        )
+        return await vision_analyze_tool(image_url=image_url, question=question, agent=self)
 
     async def _tool_image_generate(self, prompt: str) -> Dict[str, Any]:
         """Generate an image from a prompt."""
@@ -1183,10 +1181,24 @@ class MobileAgent:
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                "pattern": {"type": "string", "description": "Regex pattern to search for"},
-                                "path": {"type": "string", "description": "Directory to search in", "default": "."},
-                                "target": {"type": "string", "enum": ["content", "files"], "default": "content"},
-                                "file_glob": {"type": "string", "description": "Optional filename filter"},
+                                "pattern": {
+                                    "type": "string",
+                                    "description": "Regex pattern to search for",
+                                },
+                                "path": {
+                                    "type": "string",
+                                    "description": "Directory to search in",
+                                    "default": ".",
+                                },
+                                "target": {
+                                    "type": "string",
+                                    "enum": ["content", "files"],
+                                    "default": "content",
+                                },
+                                "file_glob": {
+                                    "type": "string",
+                                    "description": "Optional filename filter",
+                                },
                                 "limit": {"type": "integer", "default": 50},
                             },
                             "required": ["pattern"],
@@ -1202,7 +1214,10 @@ class MobileAgent:
                             "type": "object",
                             "properties": {
                                 "path": {"type": "string", "description": "File path"},
-                                "old_string": {"type": "string", "description": "Exact text to find"},
+                                "old_string": {
+                                    "type": "string",
+                                    "description": "Exact text to find",
+                                },
                                 "new_string": {"type": "string", "description": "Replacement text"},
                                 "replace_all": {"type": "boolean", "default": False},
                             },
@@ -1233,10 +1248,20 @@ class MobileAgent:
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                "action": {"type": "string", "enum": ["add", "update", "remove", "list"]},
-                                "item_id": {"type": "integer", "description": "Item id for update/remove"},
+                                "action": {
+                                    "type": "string",
+                                    "enum": ["add", "update", "remove", "list"],
+                                },
+                                "item_id": {
+                                    "type": "integer",
+                                    "description": "Item id for update/remove",
+                                },
                                 "content": {"type": "string", "description": "Task text for add"},
-                                "status": {"type": "string", "enum": ["pending", "in_progress", "completed"], "default": "pending"},
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["pending", "in_progress", "completed"],
+                                    "default": "pending",
+                                },
                             },
                             "required": ["action"],
                         },
@@ -1270,7 +1295,10 @@ class MobileAgent:
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                "action": {"type": "string", "enum": ["enable", "disable", "remove", "install"]},
+                                "action": {
+                                    "type": "string",
+                                    "enum": ["enable", "disable", "remove", "install"],
+                                },
                                 "name": {"type": "string", "description": "Skill name"},
                                 "url": {"type": "string", "description": "URL for install"},
                             },
@@ -1286,8 +1314,14 @@ class MobileAgent:
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                "action": {"type": "string", "enum": ["list", "run", "pause", "resume"]},
-                                "job_id": {"type": "string", "description": "Job id for run/pause/resume"},
+                                "action": {
+                                    "type": "string",
+                                    "enum": ["list", "run", "pause", "resume"],
+                                },
+                                "job_id": {
+                                    "type": "string",
+                                    "description": "Job id for run/pause/resume",
+                                },
                             },
                             "required": ["action"],
                         },
@@ -1301,8 +1335,15 @@ class MobileAgent:
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                "image_url": {"type": "string", "description": "Image URL or local path"},
-                                "question": {"type": "string", "description": "Question about the image", "default": "Describe this image in detail."},
+                                "image_url": {
+                                    "type": "string",
+                                    "description": "Image URL or local path",
+                                },
+                                "question": {
+                                    "type": "string",
+                                    "description": "Question about the image",
+                                    "default": "Describe this image in detail.",
+                                },
                             },
                             "required": ["image_url"],
                         },
@@ -1366,7 +1407,10 @@ class MobileAgent:
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                "column": {"type": "string", "enum": ["backlog", "in_progress", "done"]},
+                                "column": {
+                                    "type": "string",
+                                    "enum": ["backlog", "in_progress", "done"],
+                                },
                             },
                         },
                     },
@@ -1380,8 +1424,15 @@ class MobileAgent:
                             "type": "object",
                             "properties": {
                                 "title": {"type": "string", "description": "Task title"},
-                                "description": {"type": "string", "description": "Task description"},
-                                "column": {"type": "string", "enum": ["backlog", "in_progress", "done"], "default": "backlog"},
+                                "description": {
+                                    "type": "string",
+                                    "description": "Task description",
+                                },
+                                "column": {
+                                    "type": "string",
+                                    "enum": ["backlog", "in_progress", "done"],
+                                    "default": "backlog",
+                                },
                             },
                             "required": ["title"],
                         },
@@ -1410,7 +1461,10 @@ class MobileAgent:
                             "type": "object",
                             "properties": {
                                 "task_id": {"type": "string", "description": "Task id"},
-                                "column": {"type": "string", "enum": ["backlog", "in_progress", "done"]},
+                                "column": {
+                                    "type": "string",
+                                    "enum": ["backlog", "in_progress", "done"],
+                                },
                             },
                             "required": ["task_id", "column"],
                         },

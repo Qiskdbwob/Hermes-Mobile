@@ -13,7 +13,7 @@ import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from hermes_mobile.config.settings import get_settings
 
@@ -40,9 +40,7 @@ def _load_board() -> Dict[str, Any]:
 
 def _save_board(board: Dict[str, Any]) -> None:
     try:
-        _board_file().write_text(
-            json.dumps(board, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        _board_file().write_text(json.dumps(board, indent=2, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
 
@@ -185,9 +183,7 @@ async def kanban_comment_tool(task_id: str, text: str) -> Dict[str, Any]:
         task = next((t for t in board["tasks"] if t["id"] == task_id), None)
         if task is None:
             return {"error": f"Task not found: {task_id}"}
-        task.setdefault("comments", []).append(
-            {"text": text.strip(), "at": _now()}
-        )
+        task.setdefault("comments", []).append({"text": text.strip(), "at": _now()})
         task["updated_at"] = _now()
         _save_board(board)
         return {"task": _task_dict(task)}

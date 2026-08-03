@@ -1,6 +1,5 @@
 """Shared fixtures for Hermes Mobile tests."""
 
-import os
 import tempfile
 from pathlib import Path
 from typing import Generator
@@ -9,7 +8,6 @@ import pytest
 
 from hermes_mobile.config.settings import HermesMobileSettings, get_settings, reload_settings
 from hermes_mobile.memory.provider import MobileMemoryProvider
-from hermes_mobile.tools.path_security import get_allowed_directories
 
 
 @pytest.fixture(autouse=True)

@@ -1,7 +1,5 @@
 """Tests for settings module."""
 
-
-
 from hermes_mobile.config.settings import (
     HermesMobileSettings,
     _get_default_data_dir,

@@ -8,7 +8,7 @@ changes the agent's working directory so file tools stay scoped to it.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from hermes_mobile.config.settings import get_settings
 
@@ -51,7 +51,7 @@ async def project_create_tool(name: str) -> Dict[str, Any]:
     if not safe:
         return {"error": "Project name must contain letters or numbers"}
     try:
-        ( _projects_dir() / safe).mkdir(parents=True, exist_ok=True)
+        (_projects_dir() / safe).mkdir(parents=True, exist_ok=True)
         return {"ok": True, "project": safe, "current": get_current_project()}
     except Exception as e:
         return {"error": str(e)}

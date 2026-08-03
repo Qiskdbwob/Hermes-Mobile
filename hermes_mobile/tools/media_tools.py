@@ -9,7 +9,6 @@ Both degrade gracefully when the active provider has no key.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 from pathlib import Path
 from typing import Any, Dict, Optional

@@ -106,8 +106,7 @@ def test_chat_has_single_shell_header_and_desktop_derived_composer():
     all_controls = list(walk_controls(root))
     assert not any(isinstance(control, ft.Card) for control in all_controls)
     assert any(
-        isinstance(control, ft.Image) and control.src == "nous-girl.jpg"
-        for control in all_controls
+        isinstance(control, ft.Image) and control.src == "nous-girl.jpg" for control in all_controls
     )
     assert view.send_button.bgcolor == "#FFE6CB"
 

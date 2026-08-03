@@ -10,12 +10,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import flet as ft
 
 from hermes_mobile.config.settings import get_settings
-from hermes_mobile.ui.common import close_dialog, open_dialog, section_header, snack
+from hermes_mobile.ui.common import close_dialog, open_dialog
 from hermes_mobile.ui.theme import mode_colors
 
 logger = logging.getLogger(__name__)
@@ -215,9 +215,7 @@ class ArtifactsView:
                 width=420,
                 height=420,
             ),
-            actions=[
-                ft.TextButton("Close", on_click=lambda e: close_dialog(self.page, dialog))
-            ],
+            actions=[ft.TextButton("Close", on_click=lambda e: close_dialog(self.page, dialog))],
         )
         open_dialog(self.page, dialog)
 

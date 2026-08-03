@@ -219,11 +219,7 @@ class TestMobileAgent:
                     )
                 ]
             )
-            yield chunk(
-                tool_calls=[
-                    tool_delta(0, name="search", arguments='thon"}')
-                ]
-            )
+            yield chunk(tool_calls=[tool_delta(0, name="search", arguments='thon"}')])
 
         async def second_response():
             yield chunk(content="Done")
@@ -252,11 +248,7 @@ class TestMobileAgent:
     @pytest.mark.asyncio
     async def test_non_streaming_response_is_persisted_in_agent_history(self):
         response = SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="Hello", tool_calls=[])
-                )
-            ]
+            choices=[SimpleNamespace(message=SimpleNamespace(content="Hello", tool_calls=[]))]
         )
         agent = MobileAgent()
         agent._call_model = AsyncMock(return_value=response)  # type: ignore[method-assign]
@@ -344,13 +336,6 @@ class TestMobileAgent:
     def test_get_base_url_gemini(self):
         agent = MobileAgent(provider="gemini")
         assert "generativelanguage.googleapis.com" in agent._get_base_url()
-
-    def test_get_base_url_unknown_fallback(self):
-        agent = MobileAgent(provider="openai")
-        agent.settings.openai_api_key = "sk-fake"
-        agent._init_client()
-        agent.provider = "unknown"
-        assert "openrouter.ai" in agent._get_base_url()
 
     def test_clear_conversation(self):
         agent = MobileAgent()
@@ -677,21 +662,6 @@ class TestMobileAgent:
         assert result[3].role == "tool"
         assert result[3].tool_call_id == "call_1"
         assert result[3].name == "web_search"
-
-    @patch("hermes_mobile.core.agent.MobileMemoryProvider")
-    @patch("hermes_mobile.core.agent.MobileSkillManager")
-    @patch("hermes_mobile.core.agent.get_settings")
-    def test_create_mobile_agent(self, mock_settings, mock_skill_mgr, mock_mem_provider):
-        mock_settings.return_value.default_model = "gpt-4o"
-        mock_settings.return_value.default_provider = "openai"
-        mock_settings.return_value.get_memory_db_path.return_value = ":memory:"
-        mock_settings.return_value.encrypt_memory = False
-        mock_settings.return_value.get_skills_dir.return_value = "/tmp/skills"
-        agent = create_mobile_agent()
-        assert isinstance(agent, MobileAgent)
-        assert agent.model == "gpt-4o"
-        assert agent.provider == "openai"
-        assert len(agent.tools) > 0
 
     @patch("hermes_mobile.memory.provider.MobileMemoryProvider")
     @patch("hermes_mobile.skills.manager.MobileSkillManager")

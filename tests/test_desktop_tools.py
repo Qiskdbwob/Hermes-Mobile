@@ -1,6 +1,5 @@
 """Tests for desktop-parity tools (execute_code, search_files, patch, project)."""
 
-import asyncio
 import pathlib
 
 import pytest

@@ -2,19 +2,16 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from hermes_mobile.tools.web_tools import (
-    web_search_tool,
-    web_extract_tool,
-    browser_navigate_tool,
-    browser_snapshot_tool,
+    MAX_EXTRACT_CHARS,
     _clean_html,
     _extract_title,
     _parse_ddg_results,
-    MAX_EXTRACT_CHARS,
+    browser_navigate_tool,
+    browser_snapshot_tool,
+    web_extract_tool,
+    web_search_tool,
 )
-
 
 SAMPLE_HTML = """
 <html>
@@ -81,7 +78,6 @@ SAMPLE_DDG_NO_LINK = """
 
 def _make_http_response(status_code=200, text=SAMPLE_HTML, url="https://example.com"):
     """Create a proper httpx mock response."""
-    import httpx
     from httpx import Request, Response
 
     request = Request("GET", url)
@@ -308,7 +304,7 @@ class TestBrowserNavigateTool:
             mock_cls.return_value.__aenter__.return_value = mock_client
             mock_client.get = AsyncMock(return_value=_make_http_response())
 
-            result = await browser_navigate_tool(url="example.com")
+            await browser_navigate_tool(url="example.com")
             # Should have added https://
             call_args = mock_client.get.call_args
             assert call_args[0][0].startswith("https://")
@@ -356,7 +352,7 @@ class TestBrowserNavigateTool:
 
             result = await browser_navigate_tool(url="https://example.com")
             links = result.get("links", [])
-            hrefs = [l["href"] for l in links]
+            hrefs = [link["href"] for link in links]
             assert "/valid" in hrefs
             assert "#section" not in hrefs
             assert "javascript:" not in hrefs

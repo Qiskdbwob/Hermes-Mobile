@@ -168,8 +168,6 @@ class MySkill:
 
             import importlib.util
 
-            original = importlib.util.spec_from_file_location
-
             def broken_spec(*args, **kwargs):
                 return None
 
@@ -214,7 +212,7 @@ class MySkill:
 class TestMobileSkillManager:
     def test_creates_skills_dir(self, temp_dir: Path):
         skills_dir = temp_dir / "my_skills"
-        manager = MobileSkillManager(skills_dir)
+        MobileSkillManager(skills_dir)
         assert skills_dir.exists()
 
     def test_loads_nothing_from_empty_dir(self, temp_dir: Path):
@@ -343,7 +341,7 @@ class TestMobileSkillManager:
     def test_export_file_skill(self, temp_dir: Path):
         skills_dir = temp_dir / "skills"
         skills_dir.mkdir()
-        skill_path = _create_skill_file(skills_dir, "file_skill", "async def execute(): return 1")
+        _create_skill_file(skills_dir, "file_skill", "async def execute(): return 1")
         manager = MobileSkillManager(skills_dir)
         export_path = temp_dir / "exported"
         assert manager.export_skill("file_skill", export_path) is True
@@ -467,7 +465,6 @@ async def execute(q: str) -> str:
         """GitHub URL install pulls repo via git clone."""
 
         def _run_side_effect(*args, **kwargs):
-            import os
 
             cwd = kwargs.get("cwd", ".")
             tmpdir = Path(cwd)
@@ -565,7 +562,7 @@ async def execute(q: str) -> str:
         assert result.name == "skill"
 
     def test_export_package_skill(self, temp_dir: Path):
-        pkg_dir = _create_skill_package(temp_dir, "pkg_export")
+        _create_skill_package(temp_dir, "pkg_export")
         manager = MobileSkillManager(temp_dir)
         export_path = temp_dir / "exported"
         assert manager.export_skill("pkg_export", export_path) is True

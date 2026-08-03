@@ -1,7 +1,5 @@
 """Tests for MemoryProvider."""
 
-
-
 from hermes_mobile.core.agent import Message, ToolCall
 from hermes_mobile.memory.provider import MobileMemoryProvider
 

@@ -1,7 +1,5 @@
 """Tests for the kanban board tools."""
 
-import pathlib
-
 import pytest
 
 from hermes_mobile.tools import kanban_tools

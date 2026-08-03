@@ -3,6 +3,7 @@
 from unittest.mock import patch
 
 from hermes_mobile.providers import (
+    _DISCOVERED,
     AnthropicProfile,
     DeepSeekProfile,
     GoogleProfile,
@@ -13,8 +14,6 @@ from hermes_mobile.providers import (
     ProviderProfile,
     TogetherProfile,
     XAIProfile,
-    _DISCOVERED,
-    _discover_providers,
     _profile_user_agent,
     get_provider_profile,
     list_providers,

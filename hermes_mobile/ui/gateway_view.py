@@ -347,9 +347,7 @@ class GatewayView:
         state_color = c["success"] if enabled and running else c["muted_foreground"]
         port = self.gateway_manager.config.port if self.gateway_manager else 8080
         platforms = len(self.gateway_manager.config.platforms) if self.gateway_manager else 0
-        pairing_enabled = bool(
-            self.gateway_manager and self.gateway_manager.config.pairing_enabled
-        )
+        pairing_enabled = bool(self.gateway_manager and self.gateway_manager.config.pairing_enabled)
         return ft.Container(
             content=ft.Column(
                 [

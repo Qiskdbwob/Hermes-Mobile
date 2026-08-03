@@ -4,8 +4,6 @@ from hermes_mobile.toolsets import (
     HERMES_CORE_TOOLS,
     HERMES_WEBHOOK_SAFE_TOOLS,
     TOOLSETS,
-    TOOL_SCHEMAS,
-    DISTRIBUTIONS,
     ToolCategory,
     get_all_toolsets,
     get_distribution,
@@ -100,7 +98,6 @@ class TestToolsets:
             assert isinstance(toolset["category"], ToolCategory)
 
     def test_all_tool_references_valid(self):
-        all_known = set(HERMES_CORE_TOOLS) | set(TOOLSETS.keys())
         for name, toolset in TOOLSETS.items():
             for tool in toolset["tools"]:
                 assert tool in HERMES_CORE_TOOLS, (

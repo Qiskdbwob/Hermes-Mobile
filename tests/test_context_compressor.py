@@ -1,15 +1,13 @@
 """Tests for context compression module."""
 
 from hermes_mobile.core.context_compressor import (
-    estimate_tokens,
-    needs_compression,
-    compress_messages,
-    get_conversation_stats,
-    _build_summary_text,
-    TOKEN_ESTIMATE_CHARS_PER_TOKEN,
-    COMPRESSION_THRESHOLD_RATIO,
     TAIL_PRESERVE_COUNT,
-    SUMMARY_PLACEHOLDER,
+    TOKEN_ESTIMATE_CHARS_PER_TOKEN,
+    _build_summary_text,
+    compress_messages,
+    estimate_tokens,
+    get_conversation_stats,
+    needs_compression,
 )
 
 

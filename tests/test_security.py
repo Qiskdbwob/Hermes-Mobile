@@ -44,7 +44,6 @@ class TestSafeCalculate:
         assert safe_calculate("float(3)") == 3.0
         assert safe_calculate("str(42)") == "42"
         assert safe_calculate("bool(1)") is True
-        import math
 
         assert safe_calculate("sqrt(9)") == 3.0
         assert safe_calculate("ceil(3.2)") == 4

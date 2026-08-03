@@ -3,6 +3,7 @@
 Usage:
     HERMES_MOBILE_CAPTURE_DIR=/tmp/shots DISPLAY=:99 python scripts/capture_views.py
 """
+
 import asyncio
 import os
 import sys

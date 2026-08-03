@@ -1,10 +1,7 @@
 """Tests for standalone cron job scripts."""
 
 import subprocess
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 
 class TestCleanupMemory:
@@ -22,9 +19,9 @@ class TestCleanupMemory:
         mock_provider.cleanup_expired = AsyncMock()
         MockProvider.return_value = mock_provider
 
-        from hermes_mobile.cron.cleanup_memory import main
-
         import asyncio
+
+        from hermes_mobile.cron.cleanup_memory import main
 
         asyncio.run(main())
 
@@ -51,9 +48,9 @@ class TestSyncConversations:
         mock_provider.list_conversations = AsyncMock(return_value=["conv1", "conv2"])
         MockProvider.return_value = mock_provider
 
-        from hermes_mobile.cron.sync_conversations import main
-
         import asyncio
+
+        from hermes_mobile.cron.sync_conversations import main
 
         asyncio.run(main())
 
@@ -76,9 +73,9 @@ class TestSyncConversations:
         mock_provider.list_conversations = AsyncMock(return_value=[])
         MockProvider.return_value = mock_provider
 
-        from hermes_mobile.cron.sync_conversations import main
-
         import asyncio
+
+        from hermes_mobile.cron.sync_conversations import main
 
         asyncio.run(main())
 
@@ -96,9 +93,9 @@ class TestCheckUpdates:
         mock_result.stdout = "[]"
         mock_run.return_value = mock_result
 
-        from hermes_mobile.cron.check_updates import main
-
         import asyncio
+
+        from hermes_mobile.cron.check_updates import main
 
         asyncio.run(main())
 
@@ -115,9 +112,9 @@ class TestCheckUpdates:
         )
         mock_run.return_value = mock_result
 
-        from hermes_mobile.cron.check_updates import main
-
         import asyncio
+
+        from hermes_mobile.cron.check_updates import main
 
         asyncio.run(main())
 
@@ -127,9 +124,9 @@ class TestCheckUpdates:
     def test_main_pip_fails(self, mock_run):
         mock_run.side_effect = subprocess.TimeoutExpired("cmd", timeout=30)
 
-        from hermes_mobile.cron.check_updates import main
-
         import asyncio
+
+        from hermes_mobile.cron.check_updates import main
 
         # Should not raise
         asyncio.run(main())
@@ -150,9 +147,9 @@ class TestBackupData:
         mock_settings.get_data_dir.return_value = temp_dir
         mock_get_settings.return_value = mock_settings
 
-        from hermes_mobile.cron.backup_data import main
-
         import asyncio
+
+        from hermes_mobile.cron.backup_data import main
 
         asyncio.run(main())
 
@@ -178,9 +175,9 @@ class TestBackupData:
         mock_settings.get_data_dir.return_value = temp_dir
         mock_get_settings.return_value = mock_settings
 
-        from hermes_mobile.cron.backup_data import main
-
         import asyncio
+
+        from hermes_mobile.cron.backup_data import main
 
         asyncio.run(main())
 
@@ -196,9 +193,9 @@ class TestBackupData:
 
         mock_copytree.side_effect = PermissionError("Access denied")
 
-        from hermes_mobile.cron.backup_data import main
-
         import asyncio
+
+        from hermes_mobile.cron.backup_data import main
 
         # Should not raise
         asyncio.run(main())
@@ -214,9 +211,9 @@ class TestBackupData:
         mock_settings.get_data_dir.return_value = temp_dir
         mock_get_settings.return_value = mock_settings
 
-        from hermes_mobile.cron.backup_data import main
-
         import asyncio
+
+        from hermes_mobile.cron.backup_data import main
 
         asyncio.run(main())
 

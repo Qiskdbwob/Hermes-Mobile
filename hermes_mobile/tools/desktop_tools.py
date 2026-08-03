@@ -9,10 +9,8 @@ values so they can be fed back into the model loop.
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import tempfile
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -178,8 +176,10 @@ async def patch_tool(
                 "error": f"old_string found {count} times; pass replace_all=true to replace all",
                 "matches": count,
             }
-        new_text = text.replace(old_string, new_string) if replace_all else text.replace(
-            old_string, new_string, 1
+        new_text = (
+            text.replace(old_string, new_string)
+            if replace_all
+            else text.replace(old_string, new_string, 1)
         )
         resolved.write_text(new_text, encoding="utf-8")
         return {"path": str(resolved), "replaced": count if replace_all else 1}

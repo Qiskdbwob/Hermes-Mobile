@@ -1,17 +1,12 @@
 """Tests for i18n/locales module."""
 
-import json
-import os
 from pathlib import Path
-
-import pytest
 
 from hermes_mobile.locales import (
     _AVAILABLE_LOCALES,
     _DEFAULT_LOCALE,
     _count_keys,
     _load_locale,
-    _translate_dict,
     _translations,
     available_locales,
     get_locale,
@@ -128,7 +123,6 @@ class TestT:
 
     def test_format_kwargs_missing_variable_does_not_crash(self):
         """When kwargs are missing a variable in the template, it falls back gracefully."""
-        from hermes_mobile.locales import _translations
 
         _translations["test_greeting"] = "Hello {name}"
         result = t("test_greeting", wrong_var="foo")

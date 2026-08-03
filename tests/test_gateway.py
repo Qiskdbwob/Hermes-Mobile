@@ -1,22 +1,18 @@
 """Tests for the gateway/pairing system."""
 
 import asyncio
-import json
 import os
 import threading
 import time
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from hermes_mobile.gateway.mobile_gateway import (
+    ALPHABET,
     CODE_LENGTH,
-    CODE_TTL_SECONDS,
     MAX_FAILED_ATTEMPTS,
     MAX_PENDING_PER_PLATFORM,
-    RATE_LIMIT_SECONDS,
-    ALPHABET,
     BasePlatformAdapter,
     GatewayConfig,
     GatewayManager,
@@ -25,7 +21,6 @@ from hermes_mobile.gateway.mobile_gateway import (
     PairingManager,
     StreamConsumerConfig,
     _allowlist_env_for_platform,
-    _get_pairing_dir,
     _split_allowlist,
     _sync_allowlist_add,
     _sync_allowlist_remove,
@@ -132,7 +127,7 @@ class TestPairingManager:
             c.revoked = True
             manager._record_failed_attempt("telegram", "lockout_user")
             # Reset rate limit so next request_pairing call goes through
-            manager._rate_limits.pop(f"telegram:lockout_user", None)
+            manager._rate_limits.pop("telegram:lockout_user", None)
         manager._save()
         with pytest.raises(ValueError, match="Too many failed"):
             manager.request_pairing("telegram", "lockout_user", "Test")
@@ -147,7 +142,6 @@ class TestPairingManager:
 
     @patch.dict(os.environ, {"TELEGRAM_ALLOWED_USERS": "user_allow"})
     def test_is_user_authorized_with_allowlist(self, manager):
-        import hermes_mobile.gateway.mobile_gateway as gw
 
         assert manager.is_user_authorized("telegram", "user_allow") is True
 
@@ -665,7 +659,6 @@ class TestCLIHelpers:
         return get_pairing_manager()
 
     def test_cli_approve(self):
-        import hermes_mobile.gateway.mobile_gateway as gw
 
         pm = self._fresh_manager()
         code = pm.request_pairing("telegram", "cli_user", "Test")

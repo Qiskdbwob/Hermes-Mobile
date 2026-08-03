@@ -1,7 +1,5 @@
 """Tests for the cron scheduler."""
 
-import json
-import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -14,7 +12,6 @@ from hermes_mobile.cron.scheduler import (
     _compute_next_run,
     _ensure_cron_dirs,
     _execute_job,
-    _get_cron_dir,
     _get_jobs_file,
     _get_output_dir,
     _get_ticker_heartbeat_file,
@@ -476,7 +473,6 @@ class TestTicker:
         assert scheduler._ticker_thread is thread
 
     def test_get_ticker_status(self):
-        import hermes_mobile.cron.scheduler as scheduler
 
         status = get_ticker_status()
         assert "running" in status
@@ -546,7 +542,6 @@ class TestTicker:
 
     @patch("hermes_mobile.cron.scheduler._execute_job")
     def test_tick_runs_due_job(self, mock_execute):
-        import hermes_mobile.cron.scheduler as scheduler
 
         _ensure_cron_dirs()
         job = CronJob(id="due_job", name="Due Job", schedule="* * * * *", command="echo due")

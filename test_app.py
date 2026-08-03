@@ -2,7 +2,6 @@
 """Test script to run Hermes Mobile locally"""
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 
@@ -11,17 +10,17 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 # Load environment
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402 - project path is initialized above
 
 load_dotenv(project_root / ".env")
 
 # Test imports
 print("Testing imports...")
 
-from hermes_mobile.config.settings import get_settings
-from hermes_mobile.core.agent import create_mobile_agent, MobileAgent
-from hermes_mobile.memory.provider import MobileMemoryProvider
-from hermes_mobile.skills.manager import MobileSkillManager
+from hermes_mobile.config.settings import get_settings  # noqa: E402
+from hermes_mobile.core.agent import create_mobile_agent  # noqa: E402
+from hermes_mobile.memory.provider import MobileMemoryProvider  # noqa: E402
+from hermes_mobile.skills.manager import MobileSkillManager  # noqa: E402
 
 print("✅ All imports successful")
 

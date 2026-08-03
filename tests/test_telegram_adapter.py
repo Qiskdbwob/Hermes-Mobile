@@ -1,14 +1,11 @@
 """Tests for Telegram adapter."""
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from hermes_mobile.gateway.telegram_adapter import (
-    MAX_RETRY_DELAY,
     POLL_TIMEOUT,
-    RETRY_DELAY,
     TelegramAdapter,
 )
 

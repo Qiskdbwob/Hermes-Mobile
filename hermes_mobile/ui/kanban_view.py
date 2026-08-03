@@ -88,11 +88,7 @@ class KanbanView:
                     content=ft.Column(
                         [
                             self._build_column_header(name, tasks),
-                            *[
-                                self._build_card(t)
-                                for t in tasks
-                                if t.get("column") == name
-                            ],
+                            *[self._build_card(t) for t in tasks if t.get("column") == name],
                         ],
                         spacing=8,
                     ),
@@ -248,14 +244,15 @@ class KanbanView:
     # ------------------------------------------------------------------
 
     def _open_create_dialog(self):
-        dark = self.app.dark_mode
-        c = mode_colors(dark)
         title_field = ft.TextField(label="Title", autofocus=True)
         desc_field = ft.TextField(label="Description", multiline=True, min_lines=2, max_lines=4)
         column_dropdown = ft.Dropdown(
             label="Column",
             value="backlog",
-            options=[ft.dropdown.Option(key=col, text=COLUMN_META.get(col, (col, None))[0]) for col in COLUMNS],
+            options=[
+                ft.dropdown.Option(key=col, text=COLUMN_META.get(col, (col, None))[0])
+                for col in COLUMNS
+            ],
         )
         dialog = ft.AlertDialog(
             title=ft.Text("New task"),
@@ -328,6 +325,4 @@ class KanbanView:
 
     def _block_task(self, task, reason, dialog):
         close_dialog(self.page, dialog)
-        asyncio.create_task(
-            self._run(kanban_block_tool(task["id"], reason or ""), "Blocked")
-        )
+        asyncio.create_task(self._run(kanban_block_tool(task["id"], reason or ""), "Blocked"))

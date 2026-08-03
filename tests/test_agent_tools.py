@@ -2,14 +2,12 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from hermes_mobile.tools.agent_tools import (
     AGENT_TOOLS,
-    session_search_tool,
-    memory_tool,
     clarify_tool,
+    memory_tool,
     register,
+    session_search_tool,
 )
 
 

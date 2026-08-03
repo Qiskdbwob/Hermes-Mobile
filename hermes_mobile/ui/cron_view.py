@@ -327,55 +327,55 @@ class CronView:
                     [
                         ft.Container(
                             content=ft.Column(
-                                    [
-                                        ft.Row(
-                                            [
-                                                ft.Text(
-                                                    out.timestamp[:19].replace("T", " "),
-                                                    size=11,
-                                                    color=ft.Colors.OUTLINE,
-                                                ),
-                                                ft.Container(
-                                                    content=ft.Text(
-                                                        out.status.upper(),
-                                                        size=10,
-                                                        color=ft.Colors.GREEN
-                                                        if out.status == "success"
-                                                        else ft.Colors.RED,
-                                                        weight=ft.FontWeight.BOLD,
-                                                    ),
-                                                    padding=ft.Padding.symmetric(
-                                                        horizontal=6, vertical=2
-                                                    ),
-                                                    bgcolor=ft.Colors.with_opacity(
-                                                        0.1,
-                                                        ft.Colors.GREEN
-                                                        if out.status == "success"
-                                                        else ft.Colors.RED,
-                                                    ),
-                                                    border_radius=8,
-                                                ),
-                                            ],
-                                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                        ),
-                                        ft.Text(
-                                            (
-                                                f"Duration: {out.duration:.1f}s | "
-                                                f"Code: {out.return_code}"
+                                [
+                                    ft.Row(
+                                        [
+                                            ft.Text(
+                                                out.timestamp[:19].replace("T", " "),
+                                                size=11,
+                                                color=ft.Colors.OUTLINE,
                                             ),
-                                            size=10,
-                                            color=ft.Colors.OUTLINE,
+                                            ft.Container(
+                                                content=ft.Text(
+                                                    out.status.upper(),
+                                                    size=10,
+                                                    color=ft.Colors.GREEN
+                                                    if out.status == "success"
+                                                    else ft.Colors.RED,
+                                                    weight=ft.FontWeight.BOLD,
+                                                ),
+                                                padding=ft.Padding.symmetric(
+                                                    horizontal=6, vertical=2
+                                                ),
+                                                bgcolor=ft.Colors.with_opacity(
+                                                    0.1,
+                                                    ft.Colors.GREEN
+                                                    if out.status == "success"
+                                                    else ft.Colors.RED,
+                                                ),
+                                                border_radius=8,
+                                            ),
+                                        ],
+                                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                    ),
+                                    ft.Text(
+                                        (
+                                            f"Duration: {out.duration:.1f}s | "
+                                            f"Code: {out.return_code}"
                                         ),
-                                        ft.Text(
-                                            (out.stdout[:200] + "...")
-                                            if len(out.stdout) > 200
-                                            else out.stdout,
-                                            size=10,
-                                            font_family="monospace",
-                                            color=ft.Colors.OUTLINE,
-                                        ),
-                                    ],
-                                    spacing=4,
+                                        size=10,
+                                        color=ft.Colors.OUTLINE,
+                                    ),
+                                    ft.Text(
+                                        (out.stdout[:200] + "...")
+                                        if len(out.stdout) > 200
+                                        else out.stdout,
+                                        size=10,
+                                        font_family="monospace",
+                                        color=ft.Colors.OUTLINE,
+                                    ),
+                                ],
+                                spacing=4,
                             ),
                             padding=12,
                             border=ft.Border.all(1, c["border"]),

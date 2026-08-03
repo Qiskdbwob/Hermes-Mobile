@@ -68,7 +68,6 @@ class TestValidateAndResolvePath:
 
     def test_expands_user_home(self):
         resolved, err = validate_and_resolve_path("~/nonexistent_path_12345")
-        allowed = get_allowed_directories()
         # ~/ expands but likely not in allowed dirs
         if resolved is None:
             assert err is not None

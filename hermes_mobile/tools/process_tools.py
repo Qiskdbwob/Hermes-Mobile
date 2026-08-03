@@ -106,9 +106,7 @@ class MobileProcessRegistry:
     ) -> dict[str, Any]:
         action = action.lower().strip()
         if action == "list":
-            return {
-                "sessions": [self._describe(session) for session in self._sessions.values()]
-            }
+            return {"sessions": [self._describe(session) for session in self._sessions.values()]}
 
         if not session_id:
             return {"error": "session_id is required"}
