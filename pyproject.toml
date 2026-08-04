@@ -48,12 +48,9 @@ dev = [
     "black>=24.3.0",
 ]
 [tool.flet]
-app_name = "Hermes Mobile"
-package = "com.hermes.mobile"
-version = "0.1.0"
+product = "Hermes Mobile"
+bundle_id = "com.hermes.mobile"
 build_number = 1
-icon = "assets/icon.png"
-splash = {}
 permissions = [
     "INTERNET",
     "ACCESS_NETWORK_STATE",
@@ -64,8 +61,10 @@ permissions = [
     "VIBRATE",
     "POST_NOTIFICATIONS",
 ]
-android_min_sdk = 24
-android_target_sdk = 34
+
+[tool.flet.splash]
+color = "#0D2F86"
+dark_color = "#0D2F86"
 
 [tool.ruff]
 line-length = 100

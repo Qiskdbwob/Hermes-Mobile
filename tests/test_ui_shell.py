@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any, cast
 
 import flet as ft
 import pytest
 
+from hermes_mobile.config.settings import HermesMobileSettings, save_settings
 from hermes_mobile.core.agent import Message
 from hermes_mobile.main import HermesMobileApp
 from hermes_mobile.ui.chat_view import ChatView
@@ -27,6 +29,7 @@ class FakePage:
         self.updates = 0
         self.clean_calls = 0
         self.controls = []
+        self.overlay = []
 
     def update(self):
         self.updates += 1
@@ -123,9 +126,15 @@ def test_chat_has_single_shell_header_and_desktop_derived_composer():
     assert len(root.controls) == 2  # transcript + composer; app shell owns header
     all_controls = list(walk_controls(root))
     assert not any(isinstance(control, ft.Card) for control in all_controls)
-    assert any(
-        isinstance(control, ft.Image) and control.src == "nous-girl.jpg" for control in all_controls
-    )
+    hero_images = {
+        control.src: control
+        for control in all_controls
+        if isinstance(control, ft.Image)
+        and control.src in {"hermes-mascot.png", "hermes-mobile-sigil.svg"}
+    }
+    assert set(hero_images) == {"hermes-mascot.png", "hermes-mobile-sigil.svg"}
+    assert hero_images["hermes-mascot.png"].semantics_label == "Hermes"
+    assert hero_images["hermes-mobile-sigil.svg"].opacity == 0.72
     assert view.send_button.bgcolor == "#FFE6CB"
 
 
@@ -183,7 +192,6 @@ def test_connections_surface_separates_remote_from_messaging_gateway():
     app.settings.remote_username = "joao"
     app.settings.remote_profile = ""
     app.settings.remote_allow_insecure = False
-    app.settings.save = lambda: None
     app.gateway_manager = SimpleNamespace(
         _running=False,
         config=SimpleNamespace(
@@ -206,6 +214,156 @@ def test_connections_surface_separates_remote_from_messaging_gateway():
     assert not any(isinstance(control, ft.Card) for control in walk_controls(root))
     if not issubclass(ft.Button, ft.ElevatedButton):
         assert not any(isinstance(control, ft.ElevatedButton) for control in walk_controls(root))
+
+
+@pytest.mark.asyncio
+async def test_save_and_connect_persists_reconnects_and_surfaces_success(tmp_path):
+    app = fake_app()
+    settings = HermesMobileSettings(data_dir=str(tmp_path))
+    settings.runtime_mode = "remote"
+    app.settings = settings
+    app.remote_mode = True
+    app.remote_model = ""
+    app.remote_client = SimpleNamespace(state="open")
+    app.remote_status = SimpleNamespace(version="0.19.0")
+    saved_secrets = {}
+    app.remote_secret_store = SimpleNamespace(
+        load=lambda: {},
+        save=lambda **values: saved_secrets.update(values),
+    )
+    app.gateway_manager = SimpleNamespace(
+        _running=False,
+        config=SimpleNamespace(
+            enabled=False,
+            port=8080,
+            platforms={},
+            pairing_enabled=True,
+        ),
+    )
+    app.chat_view = SimpleNamespace(clear_chat=lambda **kwargs: None)
+    app.content_area = SimpleNamespace(content=None)
+    app.remote_error = ""
+    events = []
+    busy_observations = []
+
+    async def disconnect_remote():
+        events.append("disconnect")
+        app.remote_client = None
+
+    async def connect_remote(announce=False):
+        events.append(("connect", announce))
+        busy_observations.append(
+            (
+                view._saving,
+                view._connect_button.disabled,
+                view._connection_feedback,
+            )
+        )
+        app.remote_client = SimpleNamespace(state="open")
+        app.remote_status = SimpleNamespace(version="0.19.1")
+        return True
+
+    app.disconnect_remote = disconnect_remote
+    app.connect_remote = connect_remote
+
+    view = GatewayView(app)
+    view.build()
+    view._runtime_field.value = "remote"
+    view._url_field.value = "http://100.109.170.51:9119"
+    view._auth_field.value = "basic"
+    view._username_field.value = "admin"
+    view._password_field.value = "private-value"
+    view._profile_field.value = "default"
+    view._allow_insecure_field.value = False
+
+    await view._save_remote(connect=True)
+
+    persisted = json.loads(settings.settings_file().read_text(encoding="utf-8"))
+    assert persisted["runtime_mode"] == "remote"
+    assert persisted["remote_url"] == "http://100.109.170.51:9119"
+    assert persisted["remote_auth_mode"] == "basic"
+    assert saved_secrets == {"password": "private-value", "token": ""}
+    assert events == ["disconnect", ("connect", False)]
+    assert busy_observations == [(True, True, "Connecting to Hermes Remote…")]
+    assert view._connection_feedback == "Connected to Hermes 0.19.1"
+    assert view._saving is False
+
+
+@pytest.mark.asyncio
+async def test_save_and_connect_surfaces_transport_failure(tmp_path):
+    app = fake_app()
+    settings = HermesMobileSettings(data_dir=str(tmp_path))
+    settings.runtime_mode = "local"
+    settings.remote_url = "https://working.example.test"
+    settings.remote_auth_mode = "token"
+    settings.remote_username = "previous-user"
+    settings.remote_profile = "previous-profile"
+    assert save_settings(settings)
+    app.settings = settings
+    app.remote_mode = False
+    app.remote_model = ""
+    app.remote_client = None
+    app.remote_status = None
+    app.remote_error = "Remote username or password was rejected"
+    stored_secrets = {"password": "previous-password", "token": "previous-token"}
+    app.remote_secret_store = SimpleNamespace(
+        load=lambda: dict(stored_secrets),
+        save=lambda **values: stored_secrets.update(values),
+    )
+    app.gateway_manager = SimpleNamespace(
+        _running=False,
+        config=SimpleNamespace(
+            enabled=False,
+            port=8080,
+            platforms={},
+            pairing_enabled=True,
+        ),
+    )
+    cleared_chat = []
+    app.chat_view = SimpleNamespace(clear_chat=lambda **kwargs: cleared_chat.append(kwargs))
+    app.content_area = SimpleNamespace(content=None)
+    app.current_view = "messaging"
+
+    async def disconnect_remote():
+        app.remote_client = None
+
+    async def connect_remote(announce=False):
+        return False
+
+    app.disconnect_remote = disconnect_remote
+    app.connect_remote = connect_remote
+
+    view = GatewayView(app)
+    view.build()
+    view._runtime_field.value = "remote"
+    view._url_field.value = "http://100.109.170.51:9119"
+    view._auth_field.value = "basic"
+    view._username_field.value = "admin"
+    view._password_field.value = "wrong-value"
+    view._profile_field.value = "default"
+    view._allow_insecure_field.value = False
+
+    await view._save_remote(connect=True)
+
+    assert view._connection_feedback == (
+        "Connection failed: Remote username or password was rejected"
+    )
+    assert view._connection_feedback_error is True
+    assert view._saving is False
+    persisted = json.loads(settings.settings_file().read_text(encoding="utf-8"))
+    assert persisted["runtime_mode"] == "local"
+    assert persisted["remote_url"] == "https://working.example.test"
+    assert persisted["remote_auth_mode"] == "token"
+    assert persisted["remote_username"] == "previous-user"
+    assert persisted["remote_profile"] == "previous-profile"
+    assert stored_secrets == {
+        "password": "previous-password",
+        "token": "previous-token",
+    }
+    assert cleared_chat == []
+    assert app.current_view == "messaging"
+    snackbars = [control for control in app.page.overlay if isinstance(control, ft.SnackBar)]
+    assert snackbars[-1].content.value == "Remote username or password was rejected"
 
 
 def test_new_session_clears_ui_and_agent_synchronously():
@@ -301,6 +459,23 @@ def test_android_enum_selects_mobile_shell():
     assert app.page.on_resize == app._on_page_resize
 
 
+def test_theme_change_rebuilds_shell_and_preserves_active_view():
+    app = cast(Any, HermesMobileApp.__new__(HermesMobileApp))
+    app.page = FakePage()
+    app.chat_view = object()
+    app.current_view = "artifacts"
+    events = []
+    app._build_ui = lambda: events.append("build")
+    app._switch_view = lambda view: events.append(("view", view))
+    app._refresh_connection_chrome = lambda: events.append("chrome")
+
+    app.apply_theme("light")
+
+    assert app.page.theme_mode == ft.ThemeMode.LIGHT
+    assert app.page.clean_calls == 1
+    assert events == ["build", ("view", "artifacts"), "chrome"]
+
+
 def test_resize_crossing_breakpoint_rebuilds_shell_and_preserves_view():
     app = cast(Any, HermesMobileApp.__new__(HermesMobileApp))
     app.page = FakePage()
@@ -312,6 +487,8 @@ def test_resize_crossing_breakpoint_rebuilds_shell_and_preserves_view():
     switched: list[str] = []
     app._build_ui = lambda: rebuilt.append(app.is_mobile)
     app._switch_view = switched.append
+    chrome_refreshes = []
+    app._refresh_connection_chrome = lambda: chrome_refreshes.append(True)
     event = SimpleNamespace(width=430)
 
     app._on_page_resize(event)
@@ -319,6 +496,7 @@ def test_resize_crossing_breakpoint_rebuilds_shell_and_preserves_view():
     assert app.is_mobile is True
     assert rebuilt == [True]
     assert switched == ["tools"]
+    assert chrome_refreshes == [True]
     assert app.page.clean_calls == 1
     assert app.page.updates == 1
 

@@ -115,6 +115,7 @@ Be concise but thorough. Use tools when appropriate."""
     theme: str = "system"  # light, dark, system
     language: str = "en"
     font_size: int = 16
+    pet_roam: bool = True
     show_tool_calls: bool = True
     stream_responses: bool = True
 
@@ -162,10 +163,6 @@ Be concise but thorough. Use tools when appropriate."""
     _PERSISTED_FIELDS = (
         "default_provider",
         "default_model",
-        "openrouter_api_key",
-        "openai_api_key",
-        "anthropic_api_key",
-        "gemini_api_key",
         "max_iterations",
         "max_tokens",
         "temperature",
@@ -186,6 +183,7 @@ Be concise but thorough. Use tools when appropriate."""
         "theme",
         "language",
         "font_size",
+        "pet_roam",
         "show_tool_calls",
         "stream_responses",
         "request_timeout",
@@ -208,24 +206,61 @@ Be concise but thorough. Use tools when appropriate."""
             return self
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            legacy_keys = {
+                "openrouter_api_key": "openrouter",
+                "openai_api_key": "openai",
+                "anthropic_api_key": "anthropic",
+                "gemini_api_key": "google",
+            }
+            migrated = False
+            pending = {
+                provider: str(data.get(field) or "").strip()
+                for field, provider in legacy_keys.items()
+                if str(data.get(field) or "").strip()
+            }
+            if pending:
+                from hermes_mobile.remote.secrets import ProviderSecretStore
+
+                secret_store = ProviderSecretStore(self.get_data_dir())
+                for provider, api_key in pending.items():
+                    secret_store.save_key(provider, api_key)
+                migrated = True
             for k, v in data.items():
                 if k in self._PERSISTED_FIELDS and v is not None:
                     setattr(self, k, v)
+            if migrated:
+                save_settings(self)
         except Exception as e:
             logger.warning("Failed to load persisted settings: %s", e)
         return self
 
 
-def save_settings(s: HermesMobileSettings) -> None:
-    """Persist runtime settings to the config dir as JSON."""
+def save_settings(s: HermesMobileSettings) -> bool:
+    """Persist runtime settings atomically and report whether the write succeeded."""
+    fd = -1
+    raw_tmp = ""
     try:
         path = s.settings_file()
-        path.write_text(
-            json.dumps(s.to_dict(), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        payload = json.dumps(s.to_dict(), indent=2, ensure_ascii=False).encode("utf-8")
+        fd, raw_tmp = tempfile.mkstemp(prefix="settings-", dir=path.parent)
+        os.write(fd, payload)
+        os.fchmod(fd, 0o600)
+        os.close(fd)
+        fd = -1
+        os.replace(raw_tmp, path)
+        raw_tmp = ""
+        return True
     except Exception as e:
         logger.warning("Failed to save settings: %s", e)
+        return False
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if raw_tmp:
+            try:
+                Path(raw_tmp).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 # Global settings instance

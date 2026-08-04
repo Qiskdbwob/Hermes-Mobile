@@ -313,6 +313,18 @@ class TestMobileAgent:
         assert "requires the 'messages' API" in agent._client_error
         assert "OpenRouter" in agent._client_error
 
+    def test_reconfigure_preserves_messages_and_rebuilds_route(self):
+        agent = MobileAgent()
+        agent.add_user_message("Keep this context")
+        previous_session = agent.session_id
+
+        agent.reconfigure(provider="openai", model="gpt-4o-mini")
+
+        assert agent.provider == "openai"
+        assert agent.model == "gpt-4o-mini"
+        assert agent.session_id == previous_session
+        assert agent.messages[0].content == "Keep this context"
+
     def test_get_api_key_unknown(self):
         agent = MobileAgent()
         agent.provider = "unknown"
@@ -666,10 +678,11 @@ class TestMobileAgent:
     @patch("hermes_mobile.memory.provider.MobileMemoryProvider")
     @patch("hermes_mobile.skills.manager.MobileSkillManager")
     @patch("hermes_mobile.core.agent.get_settings")
-    def test_create_mobile_agent(self, mock_settings, mock_skill_mgr, mock_mem_provider):
+    def test_create_mobile_agent(self, mock_settings, mock_skill_mgr, mock_mem_provider, tmp_path):
         mock_settings.return_value.default_model = "gpt-4o"
         mock_settings.return_value.default_provider = "openai"
         mock_settings.return_value.get_memory_db_path.return_value = ":memory:"
+        mock_settings.return_value.get_data_dir.return_value = str(tmp_path)
         mock_settings.return_value.encrypt_memory = False
         mock_settings.return_value.get_skills_dir.return_value = "/tmp/skills"
         agent = create_mobile_agent()
@@ -681,10 +694,13 @@ class TestMobileAgent:
     @patch("hermes_mobile.memory.provider.MobileMemoryProvider")
     @patch("hermes_mobile.skills.manager.MobileSkillManager")
     @patch("hermes_mobile.core.agent.get_settings")
-    def test_create_mobile_agent_custom(self, mock_settings, mock_skill_mgr, mock_mem_provider):
+    def test_create_mobile_agent_custom(
+        self, mock_settings, mock_skill_mgr, mock_mem_provider, tmp_path
+    ):
         mock_settings.return_value.default_model = "gpt-4o"
         mock_settings.return_value.default_provider = "openai"
         mock_settings.return_value.get_memory_db_path.return_value = ":memory:"
+        mock_settings.return_value.get_data_dir.return_value = str(tmp_path)
         mock_settings.return_value.encrypt_memory = False
         mock_settings.return_value.get_skills_dir.return_value = "/tmp/skills"
         agent = create_mobile_agent(model="claude-3", provider="anthropic")

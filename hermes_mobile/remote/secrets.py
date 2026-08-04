@@ -10,16 +10,16 @@ from pathlib import Path
 from cryptography.fernet import Fernet, InvalidToken
 
 
-class RemoteSecretStore:
-    """Persist small credentials encrypted inside the application's sandbox.
+class _EncryptedSecretStore:
+    """Persist small credentials encrypted inside one app-private namespace.
 
     Android's application sandbox protects both files from other apps.  Keeping
     the Fernet key separate prevents credentials from appearing as plaintext in
     settings exports, logs, crash dumps, or routine configuration inspection.
     """
 
-    def __init__(self, data_dir: str | Path) -> None:
-        root = Path(data_dir).expanduser() / "remote"
+    def __init__(self, data_dir: str | Path, namespace: str) -> None:
+        root = Path(data_dir).expanduser() / namespace
         root.mkdir(parents=True, exist_ok=True)
         self._key_path = root / ".credential-key"
         self._data_path = root / "credentials.bin"
@@ -97,3 +97,26 @@ class RemoteSecretStore:
             self._data_path.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+class RemoteSecretStore(_EncryptedSecretStore):
+    """Encrypted password/token storage for a Hermes Remote connection."""
+
+    def __init__(self, data_dir: str | Path) -> None:
+        super().__init__(data_dir, "remote")
+
+
+class ProviderSecretStore(_EncryptedSecretStore):
+    """Encrypted API-key storage keyed by canonical local provider slug."""
+
+    def __init__(self, data_dir: str | Path) -> None:
+        super().__init__(data_dir, "providers")
+
+    def get_key(self, provider: str) -> str:
+        return self.load().get(str(provider).strip().lower(), "")
+
+    def save_key(self, provider: str, api_key: str) -> None:
+        slug = str(provider).strip().lower()
+        if not slug:
+            raise ValueError("provider is required")
+        self.save(**{slug: str(api_key).strip()})

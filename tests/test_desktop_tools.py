@@ -11,6 +11,7 @@ from hermes_mobile.tools.desktop_tools import (
     todo_tool,
 )
 from hermes_mobile.tools.project_tools import (
+    get_current_project,
     project_create_tool,
     project_list_tool,
     project_switch_tool,
@@ -124,6 +125,52 @@ async def test_project_flow(tmp_path, monkeypatch):
     listed = await project_list_tool()
     assert "alpha" in listed["projects"]
     assert listed["current"] == "alpha"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_name",
+    ["../config", "alpha/beta", "alpha\\beta", "/tmp/alpha", ".", ".."],
+)
+async def test_project_switch_rejects_names_that_can_escape_project_root(
+    tmp_path, monkeypatch, invalid_name
+):
+    from hermes_mobile.config import settings as settings_module
+
+    monkeypatch.setattr(
+        settings_module,
+        "get_settings",
+        lambda: _FakeSettings(tmp_path),
+    )
+    (tmp_path / "config").mkdir(exist_ok=True)
+    (tmp_path / "projects" / "alpha").mkdir(parents=True, exist_ok=True)
+
+    result = await project_switch_tool(invalid_name)
+
+    assert result == {"error": "Invalid project name"}
+    assert get_current_project() is None
+
+
+@pytest.mark.asyncio
+async def test_project_listing_and_switch_ignore_directory_symlinks(tmp_path, monkeypatch):
+    from hermes_mobile.config import settings as settings_module
+
+    monkeypatch.setattr(
+        settings_module,
+        "get_settings",
+        lambda: _FakeSettings(tmp_path),
+    )
+    private = tmp_path / "config"
+    private.mkdir()
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    (projects / "linked-private").symlink_to(private, target_is_directory=True)
+
+    listed = await project_list_tool()
+    switched = await project_switch_tool("linked-private")
+
+    assert listed["projects"] == []
+    assert switched == {"error": "Project not found: linked-private"}
 
 
 class _FakeSettings:

@@ -1,5 +1,7 @@
 """Skills View - Skill management interface"""
 
+from typing import Any, Mapping
+
 import flet as ft
 
 from hermes_mobile.locales import t
@@ -23,29 +25,53 @@ class SkillsView:
         self.app = app
         self.page = app.page
         self.skill_manager: MobileSkillManager = app.skill_manager
+        self.remote_skills: list[Mapping[str, Any]] = []
+        self.remote_loading = False
+        self.remote_error = ""
+        self._remote_scope = ""
+
+    @property
+    def remote_mode(self) -> bool:
+        return str(getattr(self.app.settings, "runtime_mode", "local")) == "remote"
 
     def build(self) -> ft.Control:
         """Build the skills view"""
         dark = self.app.dark_mode
-        actions = ft.Row(
-            [
-                ft.IconButton(
-                    icon=ft.Icons.ADD,
-                    tooltip=t("skills.create_skill"),
-                    on_click=self._on_create_skill,
-                ),
-                ft.IconButton(
-                    icon=ft.Icons.CLOUD_DOWNLOAD_OUTLINED,
-                    tooltip=t("skills.install_from_url"),
-                    on_click=self._on_install_from_url,
-                ),
-            ],
-            spacing=0,
-            tight=True,
-        )
+        if self.remote_mode:
+            actions = ft.Row(
+                [
+                    ft.IconButton(
+                        icon=ft.Icons.REFRESH,
+                        tooltip=t("skills.remote_refresh"),
+                        on_click=self._on_refresh_remote,
+                        disabled=self.remote_loading,
+                    )
+                ],
+                spacing=0,
+                tight=True,
+            )
+            subtitle = "Installed in the connected Remote profile"
+        else:
+            actions = ft.Row(
+                [
+                    ft.IconButton(
+                        icon=ft.Icons.ADD,
+                        tooltip=t("skills.create_skill"),
+                        on_click=self._on_create_skill,
+                    ),
+                    ft.IconButton(
+                        icon=ft.Icons.CLOUD_DOWNLOAD_OUTLINED,
+                        tooltip=t("skills.install_from_url"),
+                        on_click=self._on_install_from_url,
+                    ),
+                ],
+                spacing=0,
+                tight=True,
+            )
+            subtitle = t("skills.installed")
         return ft.Column(
             [
-                page_header(dark, t("skills.title"), t("skills.installed"), actions),
+                page_header(dark, t("skills.title"), subtitle, actions),
                 self._build_skills_list(),
             ],
             expand=True,
@@ -54,6 +80,8 @@ class SkillsView:
 
     def _build_skills_list(self) -> ft.Control:
         """Build the skills list"""
+        if self.remote_mode:
+            return self._build_remote_skills_list()
         skills = self.skill_manager.get_all_skills()
 
         if not skills:
@@ -77,6 +105,91 @@ class SkillsView:
             spacing=0,
             expand=True,
         )
+
+    def _build_remote_skills_list(self) -> ft.Control:
+        if self.remote_loading and not self.remote_skills:
+            return ft.Column(
+                [
+                    ft.ProgressRing(width=26, height=26, stroke_width=2),
+                    ft.Text(t("skills.remote_loading")),
+                ],
+                alignment=ft.MainAxisAlignment.CENTER,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                expand=True,
+            )
+        if self.remote_error and not self.remote_skills:
+            return empty_state(
+                self.app.dark_mode,
+                t("skills.remote_unavailable"),
+                self.remote_error,
+                ft.Icons.CLOUD_OFF_OUTLINED,
+                flat_button(
+                    "Retry",
+                    ft.Icons.REFRESH,
+                    self._on_refresh_remote,
+                    primary=True,
+                    dark=self.app.dark_mode,
+                ),
+            )
+        if not self.remote_skills:
+            return empty_state(
+                self.app.dark_mode,
+                "No Remote skills found",
+                "The connected profile reported an empty skills catalog.",
+                ft.Icons.EXTENSION_OFF_OUTLINED,
+            )
+        return ft.ListView(
+            controls=[self._build_remote_skill_row(skill) for skill in self.remote_skills],
+            padding=ft.Padding.symmetric(horizontal=16),
+            spacing=0,
+            expand=True,
+        )
+
+    def _build_remote_skill_row(self, skill: Mapping[str, Any]) -> ft.Control:
+        c = mode_colors(self.app.dark_mode)
+        category = str(skill.get("category") or t("skills.remote_category"))
+        description = str(skill.get("description") or category)
+        return flat_list_row(
+            self.app.dark_mode,
+            str(skill.get("name") or "Unnamed skill"),
+            description,
+            ft.Icon(ft.Icons.EXTENSION_OUTLINED, size=19, color=c["primary"]),
+            ft.Text(category, size=11, color=c["muted_foreground"]),
+        )
+
+    async def _on_refresh_remote(self, e=None):
+        await self.refresh_remote(force=True)
+
+    async def refresh_remote(self, *, force: bool = False) -> None:
+        if not self.remote_mode:
+            return
+        settings = self.app.settings
+        scope = (
+            f"{str(getattr(settings, 'remote_url', '') or '').rstrip('/')}|"
+            f"{str(getattr(settings, 'remote_profile', '') or 'default')}"
+        )
+        if not force and scope == self._remote_scope and (self.remote_skills or self.remote_error):
+            return
+        self.remote_loading = True
+        self.remote_error = ""
+        self._paint_current()
+        try:
+            client = getattr(self.app, "remote_client", None)
+            if client is None or client.state != "open":
+                raise RuntimeError("Connect to Hermes Remote to load this profile's skills.")
+            self.remote_skills = await client.get_remote_skills()
+            self._remote_scope = scope
+        except Exception as exc:
+            self.remote_error = str(exc).strip() or t("skills.remote_load_error")
+        finally:
+            self.remote_loading = False
+            self._paint_current()
+
+    def _paint_current(self) -> None:
+        if getattr(self.app, "current_view", "") != "skills":
+            return
+        self.app.content_area.content = self.build()
+        self.page.update()
 
     def _build_skill_card(self, skill) -> ft.Control:
         """Build a skill card"""

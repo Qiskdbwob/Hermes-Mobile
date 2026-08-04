@@ -53,6 +53,19 @@ class TestLoadLocale:
         result = _load_locale("en")
         assert result == {}
 
+    def test_locale_catalogs_have_identical_key_paths(self):
+        def key_paths(data, prefix=""):
+            paths = set()
+            for key, value in data.items():
+                path = f"{prefix}.{key}" if prefix else key
+                if isinstance(value, dict):
+                    paths.update(key_paths(value, path))
+                else:
+                    paths.add(path)
+            return paths
+
+        assert key_paths(_load_locale("en")) == key_paths(_load_locale("pt-br"))
+
 
 class TestInit:
     def teardown_method(self):
@@ -136,6 +149,12 @@ class TestT:
     def test_nested_key_resolution(self):
         value = t("nav.chat")
         assert value != "nav.chat"
+
+    def test_common_save_is_translated_in_both_locales(self):
+        init("en")
+        assert t("common.save") == "Save"
+        init("pt-br")
+        assert t("common.save") == "Salvar"
 
 
 class TestTranslateDict:

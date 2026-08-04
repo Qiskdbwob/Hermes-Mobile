@@ -9,6 +9,7 @@ from hermes_mobile.remote import (
     RemoteAuthenticationError,
     RemoteConnectionError,
     RemoteHermesClient,
+    RemoteProtocolError,
     RemoteSecretStore,
     build_gateway_ws_url,
     insecure_transport_is_private,
@@ -301,3 +302,203 @@ def test_secret_store_encrypts_and_round_trips(tmp_path: Path):
     assert store.load() == {"token": "token-value"}
     store.clear()
     assert store.load() == {}
+
+
+@pytest.mark.asyncio
+async def test_rest_transcript_accepts_current_api_data_shape():
+    def handler(request):
+        assert request.url.path == "/p/coder/api/sessions/stored-1/messages"
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [
+                    {"role": "user", "content": "Question"},
+                    {"role": "assistant", "content": "Answer"},
+                ],
+            },
+        )
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = RemoteHermesClient(
+        "https://remote.example",
+        token="secret",
+        profile="coder",
+        http_client=http,
+    )
+
+    messages = await client.get_session_messages("stored-1")
+
+    assert [item["content"] for item in messages] == ["Question", "Answer"]
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_authenticated_session_lifecycle_rest_contract():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        assert request.headers["authorization"] == "Bearer secret"
+        path = request.url.path
+        body = json.loads(request.content) if request.content else {}
+        if request.method == "PATCH" and path.endswith("/stored-1"):
+            title = body.get("title", "Original")
+            end_reason = body.get("end_reason")
+            return httpx.Response(
+                200,
+                json={
+                    "object": "hermes.session",
+                    "session": {
+                        "id": "stored-1",
+                        "title": title,
+                        "end_reason": end_reason,
+                    },
+                },
+            )
+        if request.method == "POST" and path.endswith("/stored-1/fork"):
+            return httpx.Response(
+                201,
+                json={
+                    "object": "hermes.session",
+                    "session": {"id": "fork-1", "title": body["title"]},
+                },
+            )
+        if request.method == "DELETE" and path.endswith("/stored-1"):
+            return httpx.Response(
+                200,
+                json={"object": "hermes.session.deleted", "id": "stored-1", "deleted": True},
+            )
+        return httpx.Response(404)
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = RemoteHermesClient(
+        "https://remote.example",
+        token="secret",
+        profile="coder",
+        http_client=http,
+    )
+
+    renamed = await client.rename_session("stored-1", "Renamed")
+    forked = await client.fork_session("stored-1", title="Mobile branch")
+    deleted = await client.delete_session("stored-1")
+
+    assert renamed["title"] == "Renamed"
+    assert forked == {"id": "fork-1", "title": "Mobile branch"}
+    assert deleted is True
+    assert [(request.method, request.url.path) for request in seen] == [
+        ("PATCH", "/p/coder/api/sessions/stored-1"),
+        ("POST", "/p/coder/api/sessions/stored-1/fork"),
+        ("DELETE", "/p/coder/api/sessions/stored-1"),
+    ]
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_branch_active_session_uses_rpc_and_adopts_returned_live_session():
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=status_body()))
+    http = httpx.AsyncClient(transport=transport)
+
+    def handle(frame):
+        assert frame["method"] == "session.branch"
+        assert frame["params"] == {"session_id": "live-parent", "name": "Mobile branch"}
+        return {
+            "jsonrpc": "2.0",
+            "id": frame["id"],
+            "result": {
+                "session_id": "live-branch",
+                "stored_session_id": "stored-branch",
+                "title": "Mobile branch",
+                "messages": [{"role": "user", "content": "history"}],
+            },
+        }
+
+    ws = FakeWebSocket(handle)
+    client = RemoteHermesClient(
+        "https://remote.example",
+        token="secret",
+        http_client=http,
+        websocket_factory=SocketFactory(ws),
+    )
+    await client.connect()
+    client.session_id = "live-parent"
+    client.stored_session_id = "stored-parent"
+
+    branch = await client.branch_active_session(title="Mobile branch")
+
+    assert branch["stored_session_id"] == "stored-branch"
+    assert client.session_id == "live-branch"
+    assert client.stored_session_id == "stored-branch"
+    await client.close()
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_session_rest_error_surfaces_backend_message_without_token():
+    def handler(request):
+        return httpx.Response(
+            409,
+            json={"error": {"message": "Cannot delete active session secret"}},
+        )
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = RemoteHermesClient(
+        "https://remote.example",
+        token="secret",
+        http_client=http,
+    )
+
+    with pytest.raises(RemoteProtocolError, match="Cannot delete active session <redacted>"):
+        await client.delete_session("stored-1")
+    await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_remote_capability_helpers_use_canonical_rpc_shapes():
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=status_body()))
+    http = httpx.AsyncClient(transport=transport)
+    results = {
+        "model.options": {"providers": [{"slug": "openai", "models": ["gpt-5"]}]},
+        "skills.manage": {"skills": {"GitHub": ["github"], "General": ["memory"]}},
+        "pet.gallery": {
+            "enabled": True,
+            "active": "cowboy",
+            "pets": [{"slug": "cowboy", "displayName": "Cowboy", "installed": True}],
+        },
+        "pet.select": {"ok": True, "slug": "cowboy", "displayName": "Cowboy"},
+        "pet.disable": {"ok": True},
+    }
+
+    def handle(frame):
+        return {"jsonrpc": "2.0", "id": frame["id"], "result": results[frame["method"]]}
+
+    ws = FakeWebSocket(handle)
+    client = RemoteHermesClient(
+        "https://remote.example",
+        token="secret",
+        profile="coder",
+        http_client=http,
+        websocket_factory=SocketFactory(ws),
+    )
+    await client.connect()
+
+    assert (await client.get_model_options())["providers"][0]["slug"] == "openai"
+    skills = await client.get_remote_skills()
+    assert skills == [
+        {"name": "memory", "description": "", "category": "General"},
+        {"name": "github", "description": "", "category": "GitHub"},
+    ]
+    assert (await client.get_pet_gallery(local_only=True))["active"] == "cowboy"
+    assert (await client.select_pet("cowboy"))["ok"] is True
+    assert (await client.disable_pet())["ok"] is True
+
+    sent = [(item["method"], item["params"]) for item in ws.sent]
+    assert sent == [
+        ("model.options", {"include_unconfigured": False, "explicit_only": False}),
+        ("skills.manage", {"action": "list"}),
+        ("pet.gallery", {"localOnly": True, "profile": "coder"}),
+        ("pet.select", {"slug": "cowboy", "profile": "coder"}),
+        ("pet.disable", {"profile": "coder"}),
+    ]
+    await client.close()
+    await http.aclose()

@@ -15,7 +15,7 @@ import flet as ft
 
 from hermes_mobile.core.agent import Message, ToolCall
 from hermes_mobile.locales import t
-from hermes_mobile.ui.common import MONO_FONT, brand_mark, close_dialog, open_dialog, snack
+from hermes_mobile.ui.common import MONO_FONT, close_dialog, hermes_welcome_art, open_dialog, snack
 from hermes_mobile.ui.theme import mode_colors
 
 logger = logging.getLogger(__name__)
@@ -233,8 +233,8 @@ class ChatView:
         welcome = ft.Container(
             content=ft.Column(
                 [
-                    brand_mark(64),
-                    ft.Container(height=18),
+                    hermes_welcome_art(136),
+                    ft.Container(height=10),
                     ft.Text(
                         "Hermes",
                         size=27,
@@ -297,6 +297,9 @@ class ChatView:
         self.send_button.disabled = False
         self.send_button.icon = ft.Icons.STOP_ROUNDED if busy else ft.Icons.ARROW_UPWARD
         self.send_button.tooltip = "Stop" if busy else t("chat.send")
+        pet = getattr(self.app, "pet_view", None)
+        if pet is not None:
+            pet.set_activity("run" if busy else "idle")
         self.page.update()
 
     def set_status(self, text: str):

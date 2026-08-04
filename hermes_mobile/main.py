@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import os
-from typing import Any, cast
+from typing import Any, Mapping, cast
 
 import flet as ft
 
@@ -28,6 +28,7 @@ from hermes_mobile.ui.cron_view import CronView
 from hermes_mobile.ui.gateway_view import GatewayView
 from hermes_mobile.ui.kanban_view import KanbanView
 from hermes_mobile.ui.memory_view import MemoryView
+from hermes_mobile.ui.pet_view import MobilePet
 from hermes_mobile.ui.plugins_view import PluginsView
 from hermes_mobile.ui.sessions_view import SessionsView
 from hermes_mobile.ui.settings_view import SettingsView
@@ -74,6 +75,7 @@ class HermesMobileApp:
         self.remote_client: RemoteHermesClient | None = None
         self.remote_status = None
         self.remote_model = ""
+        self.remote_error = ""
         self.current_session_title = t("chat.new_session")
         self.remote_secret_store: RemoteSecretStore | None = None
         self._remote_connect_lock = asyncio.Lock()
@@ -93,6 +95,7 @@ class HermesMobileApp:
         self.terminal_view: TerminalView = None
         self.kanban_view: KanbanView = None
         self.sessions_view: SessionsView = cast(SessionsView, None)
+        self.pet_view: MobilePet = cast(MobilePet, None)
 
         # Navigation
         self.current_view = "chat"
@@ -156,12 +159,33 @@ class HermesMobileApp:
         theme_setting = str(getattr(self.settings, "theme", "system") or "system").lower()
         self.page.theme = build_theme(dark=False)
         self.page.dark_theme = build_theme(dark=True)
+        self._set_theme_mode(theme_setting)
+
+    def _set_theme_mode(self, theme_setting: str) -> None:
+        """Set the requested effective Flet theme without rebuilding controls."""
         if theme_setting == "dark":
             self.page.theme_mode = ft.ThemeMode.DARK
         elif theme_setting == "light":
             self.page.theme_mode = ft.ThemeMode.LIGHT
         else:
             self.page.theme_mode = ft.ThemeMode.SYSTEM
+
+    def apply_theme(self, theme_setting: str) -> None:
+        """Apply a theme and rebuild every token-bound shell surface in place."""
+        self.page.theme = build_theme(dark=False)
+        self.page.dark_theme = build_theme(dark=True)
+        self._set_theme_mode(str(theme_setting or "system").lower())
+        if self.chat_view is None:
+            self.page.update()
+            return
+
+        active_view = self.current_view
+        self.page.clean()
+        self._build_ui()
+        if active_view != "chat":
+            self._switch_view(active_view)
+        self._refresh_connection_chrome()
+        self.page.update()
 
     def _on_page_resize(self, event: Any):
         """Swap the shell when a web/desktop viewport crosses the phone breakpoint."""
@@ -179,6 +203,7 @@ class HermesMobileApp:
         self._build_ui()
         if active_view != "chat":
             self._switch_view(active_view)
+        self._refresh_connection_chrome()
         self.page.update()
 
     @property
@@ -231,6 +256,7 @@ class HermesMobileApp:
         self.gateway_manager = GatewayManager(gateway_config)
 
         # Initialize views
+        self.pet_view = MobilePet(self)
         self.chat_view = ChatView(self)
         self.settings_view = SettingsView(self)
         self.skills_view = SkillsView(self)
@@ -250,6 +276,7 @@ class HermesMobileApp:
     def _build_ui(self):
         """Build the main UI"""
         self._views = list(self.MOBILE_VIEWS if self.is_mobile else self.DESKTOP_VIEWS)
+        c = mode_colors(self.dark_mode)
 
         def nav_dest(cls, view: str):
             specs = {
@@ -314,6 +341,7 @@ class HermesMobileApp:
             content=self.chat_view.build(),
             expand=True,
             padding=0,
+            bgcolor=c["background"],
         )
 
         # Brand header (mobile)
@@ -337,7 +365,7 @@ class HermesMobileApp:
             )
             self.page.add(
                 ft.SafeArea(
-                    content=mobile_shell,
+                    content=ft.Stack([mobile_shell, self.pet_view.build()], expand=True),
                     avoid_intrusions_top=True,
                     avoid_intrusions_bottom=True,
                     maintain_bottom_view_padding=True,
@@ -590,6 +618,16 @@ class HermesMobileApp:
         self.content_area.content = new_content
         self._update_app_bar_title(view)
         self.page.update()
+        if view == "artifacts" and self.remote_mode:
+            asyncio.create_task(self.artifacts_view.refresh_remote())
+        elif view == "skills" and self.remote_mode:
+            asyncio.create_task(self.skills_view.refresh_remote())
+        elif view == "settings":
+            if self.remote_mode:
+                asyncio.create_task(self.settings_view.refresh_remote_models())
+                asyncio.create_task(self.settings_view.refresh_pet_gallery())
+            else:
+                asyncio.create_task(self.settings_view.refresh_local_models())
 
     def _update_app_bar_title(self, view: str):
         """Keep title, context and chat-only actions synchronized."""
@@ -660,6 +698,10 @@ class HermesMobileApp:
         except Exception as exc:
             snack(self.page, str(exc), error=True)
             return
+        self.activate_remote_session_result(result, title)
+
+    def activate_remote_session_result(self, result: Mapping[str, Any], title: str) -> None:
+        """Render a session result that is already active in the remote runtime."""
         self.chat_view.load_remote_history(result.get("messages") or [])
         self.current_session_title = title
         self._navigate_to("chat")
@@ -676,6 +718,7 @@ class HermesMobileApp:
         if not self.settings or not self.remote_secret_store:
             return False
         if self.remote_client is not None and self.remote_client.state == "open":
+            self.remote_error = ""
             if announce:
                 version = getattr(self.remote_status, "version", "") or "unknown version"
                 snack(self.page, f"Connected to Hermes {version}")
@@ -702,15 +745,19 @@ class HermesMobileApp:
             on_state=self._on_remote_state,
         )
         self.remote_client = client
+        self.remote_error = ""
         try:
             self.remote_status = await client.connect()
         except Exception as exc:
+            self.remote_error = str(exc)
             logger.exception("Remote backend connection failed")
             self._refresh_connection_chrome()
             if announce:
                 snack(self.page, str(exc), error=True)
             return False
+        self.remote_error = ""
         self._refresh_connection_chrome()
+        await self.refresh_pet()
         if announce:
             version = self.remote_status.version or "unknown version"
             snack(self.page, f"Connected to Hermes {version}")
@@ -723,8 +770,25 @@ class HermesMobileApp:
         self.remote_client = None
         self.remote_status = None
         self.remote_model = ""
+        self.remote_error = ""
         self._remote_tool_calls.clear()
+        if self.pet_view is not None:
+            self.pet_view.hide()
         self._refresh_connection_chrome()
+
+    async def refresh_pet(self) -> None:
+        """Load the active profile pet without coupling it to Sessions."""
+        client = self.remote_client
+        if client is None or client.state != "open" or self.pet_view is None:
+            if self.pet_view is not None:
+                self.pet_view.hide()
+            return
+        try:
+            self.pet_view.set_info(await client.get_pet_info())
+            self.page.update()
+        except Exception as exc:
+            logger.info("Remote pet unavailable: %s", exc)
+            self.pet_view.hide()
 
     async def _on_remote_state(self, state: str):
         logger.info("Remote Hermes state: %s", state)
@@ -779,6 +843,8 @@ class HermesMobileApp:
                     self.chat_view.append_assistant_message(text)
             self.chat_view.finalize_assistant_message()
             self.chat_view.set_busy(False)
+            if self.pet_view is not None:
+                self.pet_view.flash_activity("wave")
             self.chat_view.set_status("")
         elif event.type == "tool.start":
             tool_id = str(payload.get("tool_id") or payload.get("id") or "remote-tool")
@@ -823,11 +889,15 @@ class HermesMobileApp:
             if model and hasattr(self, "_app_bar_subtitle"):
                 self._app_bar_subtitle.value = f"Remote · {model.split('/')[-1]}"
             self._refresh_connection_chrome()
+        elif event.type == "pet.changed":
+            await self.refresh_pet()
         elif event.type == "error":
             message = str(payload.get("message") or "Remote Hermes error")
             self.chat_view.append_assistant_message(f"**Error:** {message}")
             self.chat_view.finalize_assistant_message()
             self.chat_view.set_busy(False)
+            if self.pet_view is not None:
+                self.pet_view.flash_activity("failed")
             self.chat_view.set_status("")
         elif event.type == "background.complete":
             self.chat_view.set_status(str(payload.get("text") or "Background task complete"))
@@ -885,6 +955,8 @@ class HermesMobileApp:
                 self.chat_view.append_assistant_message(f"**Remote error:** {exc}")
                 self.chat_view.finalize_assistant_message()
                 self.chat_view.set_busy(False)
+                if self.pet_view is not None:
+                    self.pet_view.flash_activity("failed")
                 self.chat_view.set_status("")
                 return
 
@@ -892,10 +964,12 @@ class HermesMobileApp:
             self.chat_view.set_busy(False)
             return
         self._active_local_turn = asyncio.current_task()
+        reaction = ""
         try:
             async for chunk in self.agent.run_conversation(text, stream=True):
                 self.chat_view.append_assistant_message(chunk)
             self.chat_view.finalize_assistant_message()
+            reaction = "wave"
         except asyncio.CancelledError:
             self.chat_view.finalize_assistant_message()
             self.chat_view.set_status("Stopped")
@@ -903,9 +977,12 @@ class HermesMobileApp:
             logger.exception("Conversation turn failed")
             self.chat_view.append_assistant_message(f"**Error:** {exc}")
             self.chat_view.finalize_assistant_message()
+            reaction = "failed"
         finally:
             self._active_local_turn = None
             self.chat_view.set_busy(False)
+            if reaction and self.pet_view is not None:
+                self.pet_view.flash_activity(reaction)
 
     async def interrupt_turn(self):
         """Interrupt the active local task or canonical remote session."""

@@ -452,11 +452,9 @@ class RemoteHermesClient:
     async def get_session_messages(self, stored_session_id: str) -> list[Mapping[str, Any]]:
         """Fetch the durable transcript using the same REST fallback as Desktop."""
         session_id = quote(str(stored_session_id), safe="")
-        params = {"profile": self.profile} if self.profile else None
         try:
             response = await self._http.get(
-                self._url(f"/api/sessions/{session_id}/messages"),
-                params=params,
+                self._url(self._profile_api_path(f"/api/sessions/{session_id}/messages")),
                 headers=self._token_headers(),
             )
         except httpx.HTTPError:
@@ -468,9 +466,116 @@ class RemoteHermesClient:
         except ValueError:
             return []
         messages = payload.get("messages") if isinstance(payload, dict) else None
+        if not isinstance(messages, list) and isinstance(payload, dict):
+            messages = payload.get("data")
         if not isinstance(messages, list):
             return []
         return [item for item in messages if isinstance(item, dict)]
+
+    def _profile_api_path(self, path: str) -> str:
+        """Scope REST endpoints using the backend's canonical profile prefix."""
+        clean_path = f"/{str(path).lstrip('/')}"
+        profile = str(self.profile or "").strip()
+        if not profile or profile == "default":
+            return clean_path
+        return f"/p/{quote(profile, safe='')}{clean_path}"
+
+    async def _session_rest_request(
+        self,
+        method: str,
+        stored_session_id: str,
+        *,
+        suffix: str = "",
+        body: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, Any]:
+        """Call the authenticated Desktop session REST API with safe errors."""
+        session_id = str(stored_session_id or "").strip()
+        if not session_id:
+            raise ValueError("stored_session_id is required")
+        path = self._profile_api_path(f"/api/sessions/{quote(session_id, safe='')}{suffix}")
+        kwargs: dict[str, Any] = {"headers": self._token_headers()}
+        if body is not None:
+            kwargs["json"] = dict(body)
+        try:
+            response = await self._http.request(method, self._url(path), **kwargs)
+        except httpx.HTTPError as exc:
+            safe_error = redact_transport_error(exc, self.token, self.password)
+            raise RemoteConnectionError(f"Remote session request failed: {safe_error}") from exc
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            if response.status_code >= 400:
+                raise RemoteProtocolError(
+                    f"Remote session request failed: HTTP {response.status_code}"
+                ) from exc
+            raise RemoteProtocolError("Remote session endpoint did not return JSON") from exc
+        if response.status_code >= 400:
+            message = ""
+            if isinstance(payload, dict):
+                error = payload.get("error")
+                if isinstance(error, dict):
+                    message = str(error.get("message") or "")
+                elif error:
+                    message = str(error)
+                if not message:
+                    message = str(payload.get("detail") or payload.get("message") or "")
+            safe_message = redact_transport_error(message, self.token, self.password)
+            detail = safe_message or f"HTTP {response.status_code}"
+            raise RemoteProtocolError(f"Remote session request failed: {detail}")
+        if not isinstance(payload, dict):
+            raise RemoteProtocolError("Remote session response must be an object")
+        return payload
+
+    async def rename_session(self, stored_session_id: str, title: str) -> Mapping[str, Any]:
+        clean_title = str(title or "").strip()
+        if not clean_title:
+            raise ValueError("Session title cannot be empty")
+        payload = await self._session_rest_request(
+            "PATCH",
+            stored_session_id,
+            body={"title": clean_title},
+        )
+        session = payload.get("session")
+        if not isinstance(session, dict):
+            raise RemoteProtocolError("Rename response omitted the session")
+        return session
+
+    async def branch_active_session(self, *, title: str = "") -> Mapping[str, Any]:
+        """Branch the connected live session without resuming it a second time."""
+        live_session_id = str(self.session_id or "").strip()
+        if not live_session_id:
+            raise RemoteConnectionError("There is no active remote session to branch")
+        params: dict[str, Any] = {"session_id": live_session_id}
+        clean_title = str(title or "").strip()
+        if clean_title:
+            params["name"] = clean_title
+        result = await self.request("session.branch", params)
+        if not isinstance(result, dict):
+            raise RemoteProtocolError("session.branch response must be an object")
+        branch_session_id = str(result.get("session_id") or "").strip()
+        stored_session_id = str(result.get("stored_session_id") or "").strip()
+        if not branch_session_id or not stored_session_id:
+            raise RemoteProtocolError("session.branch returned incomplete session identifiers")
+        self.session_id = branch_session_id
+        self.stored_session_id = stored_session_id
+        return result
+
+    async def delete_session(self, stored_session_id: str) -> bool:
+        payload = await self._session_rest_request("DELETE", stored_session_id)
+        return bool(payload.get("deleted"))
+
+    async def fork_session(self, stored_session_id: str, *, title: str = "") -> Mapping[str, Any]:
+        body = {"title": str(title).strip()} if str(title).strip() else {}
+        payload = await self._session_rest_request(
+            "POST",
+            stored_session_id,
+            suffix="/fork",
+            body=body,
+        )
+        session = payload.get("session")
+        if not isinstance(session, dict):
+            raise RemoteProtocolError("Branch response omitted the session")
+        return session
 
     async def submit_prompt(self, text: str) -> Mapping[str, Any]:
         if not str(text or "").strip():
@@ -494,11 +599,104 @@ class RemoteHermesClient:
             return []
         return [item for item in result["sessions"] if isinstance(item, dict)]
 
+    async def get_projects_tree(self) -> Mapping[str, Any]:
+        """Fetch Desktop's authoritative project overview snapshot."""
+        result = await self.request(
+            "projects.tree",
+            {"preview_limit": 3, "session_limit": 2000},
+        )
+        if not isinstance(result, dict):
+            return {"projects": [], "active_id": None, "scoped_session_ids": []}
+        projects = result.get("projects")
+        return {
+            "projects": [item for item in projects if isinstance(item, dict)]
+            if isinstance(projects, list)
+            else [],
+            "active_id": result.get("active_id"),
+            "scoped_session_ids": result.get("scoped_session_ids") or [],
+        }
+
+    async def get_project_sessions(self, project_id: str) -> Optional[Mapping[str, Any]]:
+        """Hydrate one Desktop project into repos, lanes, and session rows."""
+        if not str(project_id or "").strip():
+            raise ValueError("project_id is required")
+        result = await self.request(
+            "projects.project_sessions",
+            {"project_id": str(project_id), "session_limit": 5000},
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("project"), dict):
+            return None
+        return result["project"]
+
     async def get_pet_info(self) -> Mapping[str, Any]:
         """Return the active Remote pet using the canonical Desktop RPC."""
         params = {"profile": self.profile} if self.profile else {}
         result = await self.request("pet.info", params)
         return result if isinstance(result, dict) else {"enabled": False}
+
+    async def get_model_options(self, *, refresh: bool = False) -> Mapping[str, Any]:
+        """Return the backend-owned provider/model inventory."""
+        result = await self.request(
+            "model.options",
+            {
+                "include_unconfigured": False,
+                "explicit_only": False,
+                **({"refresh": True} if refresh else {}),
+            },
+        )
+        return result if isinstance(result, dict) else {"providers": []}
+
+    async def get_remote_skills(self) -> list[Mapping[str, Any]]:
+        """Return skills installed in the connected Hermes runtime."""
+        result = await self.request("skills.manage", {"action": "list"})
+        skills = result.get("skills") if isinstance(result, dict) else None
+        rows: list[Mapping[str, Any]] = []
+        if isinstance(skills, dict):
+            for category, items in sorted(skills.items(), key=lambda item: str(item[0]).lower()):
+                if not isinstance(items, list):
+                    continue
+                for item in items:
+                    if isinstance(item, str) and item.strip():
+                        rows.append(
+                            {
+                                "name": item.strip(),
+                                "description": "",
+                                "category": str(category),
+                            }
+                        )
+        elif isinstance(skills, list):
+            for item in skills:
+                if isinstance(item, dict):
+                    rows.append(item)
+                elif isinstance(item, str) and item.strip():
+                    rows.append({"name": item.strip(), "description": ""})
+        return rows
+
+    async def get_pet_gallery(self, *, local_only: bool = False) -> Mapping[str, Any]:
+        """Return the profile-scoped Desktop petdex gallery."""
+        params: dict[str, Any] = {"localOnly": bool(local_only)}
+        if self.profile:
+            params["profile"] = self.profile
+        result = await self.request("pet.gallery", params)
+        if not isinstance(result, dict):
+            return {"enabled": False, "active": "", "pets": []}
+        return result
+
+    async def select_pet(self, slug: str) -> Mapping[str, Any]:
+        """Install if needed and select a pet in the active Remote profile."""
+        params: dict[str, Any] = {"slug": str(slug).strip()}
+        if not params["slug"]:
+            raise ValueError("slug is required")
+        if self.profile:
+            params["profile"] = self.profile
+        result = await self.request("pet.select", params)
+        return result if isinstance(result, dict) else {"ok": False}
+
+    async def disable_pet(self) -> Mapping[str, Any]:
+        """Disable the active pet in the connected Remote profile."""
+        params = {"profile": self.profile} if self.profile else {}
+        result = await self.request("pet.disable", params)
+        return result if isinstance(result, dict) else {"ok": False}
 
     async def respond_approval(self, choice: str) -> Any:
         return await self.request(

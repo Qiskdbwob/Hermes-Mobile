@@ -1,10 +1,12 @@
 """Remote Hermes connection and local messaging gateway management."""
 
 import asyncio
+import logging
 import time
 
 import flet as ft
 
+from hermes_mobile.config.settings import save_settings
 from hermes_mobile.gateway.mobile_gateway import (
     cli_approve,
     cli_revoke,
@@ -23,6 +25,8 @@ from hermes_mobile.ui.common import (
 )
 from hermes_mobile.ui.theme import mode_colors
 
+logger = logging.getLogger(__name__)
+
 
 class GatewayView:
     """Manage the Desktop-compatible remote runtime and messaging gateway."""
@@ -40,6 +44,14 @@ class GatewayView:
         self._token_field = None
         self._profile_field = None
         self._allow_insecure_field = None
+        self._connect_button = None
+        self._connect_progress = None
+        self._feedback_text = None
+        self._feedback_row = None
+        self._feedback_container = None
+        self._saving = False
+        self._connection_feedback = ""
+        self._connection_feedback_error = False
 
     def build(self) -> ft.Control:
         c = mode_colors(self.app.dark_mode)
@@ -70,47 +82,50 @@ class GatewayView:
                     padding=ft.Padding.symmetric(horizontal=20, vertical=16),
                 ),
                 hairline(self.app.dark_mode),
-                ft.ListView(
-                    controls=[
-                        ft.Container(
-                            content=ft.Column(
-                                [
-                                    section_label(
-                                        self.app.dark_mode,
-                                        "HERMES REMOTE",
-                                        "Desktop protocol",
-                                    ),
-                                    self._build_remote_status(),
-                                    self._build_remote_form(),
-                                ],
-                                spacing=14,
+                self._build_body_list(),
+            ],
+            expand=True,
+            spacing=0,
+        )
+
+    def _build_body_list(self) -> ft.ListView:
+        return ft.ListView(
+            controls=[
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            section_label(
+                                self.app.dark_mode,
+                                "HERMES REMOTE",
+                                "Desktop protocol",
                             ),
-                            padding=ft.Padding.symmetric(horizontal=20, vertical=18),
-                        ),
-                        hairline(self.app.dark_mode),
-                        ft.Container(
-                            content=ft.Column(
-                                [
-                                    section_label(
-                                        self.app.dark_mode,
-                                        "MESSAGING GATEWAY",
-                                        "Telegram · Discord · Pairing",
-                                    ),
-                                    self._build_gateway_status(),
-                                    ft.Text(
-                                        "Pending pairing codes",
-                                        size=15,
-                                        weight=ft.FontWeight.W_600,
-                                    ),
-                                    self._build_pairing_list(),
-                                ],
-                                spacing=12,
+                            self._build_remote_status(),
+                            self._build_remote_form(),
+                        ],
+                        spacing=14,
+                    ),
+                    padding=ft.Padding.symmetric(horizontal=20, vertical=18),
+                ),
+                hairline(self.app.dark_mode),
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            section_label(
+                                self.app.dark_mode,
+                                "MESSAGING GATEWAY",
+                                "Telegram · Discord · Pairing",
                             ),
-                            padding=ft.Padding.symmetric(horizontal=20, vertical=18),
-                        ),
-                    ],
-                    expand=True,
-                    spacing=0,
+                            self._build_gateway_status(),
+                            ft.Text(
+                                "Pending pairing codes",
+                                size=15,
+                                weight=ft.FontWeight.W_600,
+                            ),
+                            self._build_pairing_list(),
+                        ],
+                        spacing=12,
+                    ),
+                    padding=ft.Padding.symmetric(horizontal=20, vertical=18),
                 ),
             ],
             expand=True,
@@ -236,24 +251,57 @@ class GatewayView:
         )
 
         connected = self.app.remote_client is not None and self.app.remote_client.state == "open"
+        busy_label = "Connecting…" if "Connecting" in self._connection_feedback else "Saving…"
+        self._connect_button = flat_button(
+            busy_label if self._saving else "Save & connect",
+            ft.Icons.SYNC if self._saving else ft.Icons.LINK,
+            lambda e: asyncio.create_task(self._save_remote(connect=True)),
+            self.app.dark_mode,
+            primary=True,
+        )
+        self._connect_button.disabled = self._saving
         action_controls = [
-            flat_button(
-                "Save & connect",
-                ft.Icons.LINK,
-                lambda e: asyncio.create_task(self._save_remote(connect=True)),
-                self.app.dark_mode,
-                primary=True,
-            )
+            self._connect_button,
         ]
         if connected:
-            action_controls.append(
-                flat_button(
-                    "Disconnect",
-                    ft.Icons.LINK_OFF,
-                    lambda e: asyncio.create_task(self._disconnect()),
-                    self.app.dark_mode,
-                )
+            disconnect_button = flat_button(
+                "Disconnect",
+                ft.Icons.LINK_OFF,
+                lambda e: asyncio.create_task(self._disconnect()),
+                self.app.dark_mode,
             )
+            disconnect_button.disabled = self._saving
+            action_controls.append(disconnect_button)
+
+        feedback_color = (
+            ft.Colors.ERROR
+            if self._connection_feedback_error
+            else (c["primary"] if self._saving else c["success"])
+        )
+        self._connect_progress = ft.ProgressRing(
+            width=16,
+            height=16,
+            stroke_width=2,
+            color=c["primary"],
+            visible=self._saving,
+        )
+        self._feedback_text = ft.Text(
+            self._connection_feedback,
+            size=12,
+            color=feedback_color,
+            selectable=True,
+            expand=True,
+        )
+        self._feedback_row = ft.Row(
+            [self._connect_progress, self._feedback_text],
+            spacing=8,
+            visible=bool(self._connection_feedback),
+        )
+        self._feedback_container = ft.Container(
+            content=self._feedback_row,
+            height=24,
+            alignment=ft.Alignment.CENTER_LEFT,
+        )
 
         remote_controls = ft.Column(
             [
@@ -271,6 +319,7 @@ class GatewayView:
                     size=11,
                     color=c["muted_foreground"],
                 ),
+                self._feedback_container,
                 ft.Row(action_controls, spacing=8, wrap=True),
             ],
             spacing=10,
@@ -294,46 +343,127 @@ class GatewayView:
         if update:
             self.page.update()
 
-    async def _save_remote(self, connect: bool):
-        settings = self.app.settings
-        mode = str(self._runtime_field.value or "local")
-        url = str(self._url_field.value or "").strip()
-        if mode == "remote":
-            try:
-                normalized = normalize_remote_base_url(url)
-            except ValueError as exc:
-                snack(self.page, str(exc), error=True)
-                return
-            if not insecure_transport_is_private(normalized) and normalized.startswith("http://"):
-                if not self._allow_insecure_field.value:
-                    snack(
-                        self.page,
-                        "Public HTTP is blocked. Use HTTPS or explicitly allow insecure transport.",
-                        error=True,
-                    )
-                    return
-            url = normalized
-
-        settings.runtime_mode = mode
-        settings.remote_url = url
-        settings.remote_auth_mode = str(self._auth_field.value or "auto")
-        settings.remote_username = str(self._username_field.value or "").strip()
-        settings.remote_profile = str(self._profile_field.value or "").strip()
-        settings.remote_allow_insecure = bool(self._allow_insecure_field.value)
-        settings.save()
-        if self.app.remote_secret_store:
-            self.app.remote_secret_store.save(
-                password=str(self._password_field.value or ""),
-                token=str(self._token_field.value or ""),
+    def _set_connection_feedback(self, message: str, *, error: bool, busy: bool):
+        """Keep connection progress visible and prevent duplicate submissions."""
+        self._connection_feedback = message
+        self._connection_feedback_error = error
+        self._saving = busy
+        c = mode_colors(self.app.dark_mode)
+        if self._connect_button is not None:
+            self._connect_button.disabled = busy
+            self._connect_button.content = (
+                ("Connecting…" if "Connecting" in message else "Saving…")
+                if busy
+                else "Save & connect"
             )
+            self._connect_button.icon = ft.Icons.SYNC if busy else ft.Icons.LINK
+        if self._connect_progress is not None:
+            self._connect_progress.visible = busy
+        if self._feedback_text is not None:
+            self._feedback_text.value = message
+            self._feedback_text.color = (
+                ft.Colors.ERROR if error else (c["primary"] if busy else c["success"])
+            )
+        if self._feedback_row is not None:
+            self._feedback_row.visible = bool(message)
+        self.page.update()
 
-        self.app.chat_view.clear_chat(show_welcome=True)
-        if mode == "remote" and connect:
-            await self.app.connect_remote(announce=True)
-        else:
-            await self.app.disconnect_remote()
-            snack(self.page, "Local agent selected")
-        self._refresh()
+    async def _save_remote(self, connect: bool):
+        if self._saving:
+            return
+        self._set_connection_feedback("Saving connection settings…", error=False, busy=True)
+        settings = self.app.settings
+        setting_names = (
+            "runtime_mode",
+            "remote_url",
+            "remote_auth_mode",
+            "remote_username",
+            "remote_profile",
+            "remote_allow_insecure",
+        )
+        previous_settings = {name: getattr(settings, name) for name in setting_names}
+        previous_secrets = (
+            self.app.remote_secret_store.load() if self.app.remote_secret_store else {}
+        )
+        previous_connected = bool(
+            self.app.remote_client is not None and self.app.remote_client.state == "open"
+        )
+        try:
+            mode = str(self._runtime_field.value or "local")
+            url = str(self._url_field.value or "").strip()
+            if mode == "remote":
+                normalized = normalize_remote_base_url(url)
+                if (
+                    not insecure_transport_is_private(normalized)
+                    and normalized.startswith("http://")
+                    and not self._allow_insecure_field.value
+                ):
+                    raise ValueError(
+                        "Public HTTP is blocked. Use HTTPS or explicitly allow insecure transport.",
+                    )
+                url = normalized
+
+            settings.runtime_mode = mode
+            settings.remote_url = url
+            settings.remote_auth_mode = str(self._auth_field.value or "auto")
+            settings.remote_username = str(self._username_field.value or "").strip()
+            settings.remote_profile = str(self._profile_field.value or "").strip()
+            settings.remote_allow_insecure = bool(self._allow_insecure_field.value)
+            if self.app.remote_secret_store:
+                self.app.remote_secret_store.save(
+                    password=str(self._password_field.value or ""),
+                    token=str(self._token_field.value or ""),
+                )
+
+            if mode == "remote" and connect:
+                self._set_connection_feedback(
+                    "Connecting to Hermes Remote…",
+                    error=False,
+                    busy=True,
+                )
+                await self.app.disconnect_remote()
+                connected = await self.app.connect_remote(announce=False)
+                if not connected:
+                    raise RuntimeError(
+                        getattr(self.app, "remote_error", "") or "Hermes Remote connection failed"
+                    )
+                version = getattr(self.app.remote_status, "version", "") or "unknown version"
+                message = f"Connected to Hermes {version}"
+            else:
+                await self.app.disconnect_remote()
+                message = "Local agent selected"
+            if not save_settings(settings):
+                raise RuntimeError("Connection settings could not be saved")
+            self.app.chat_view.clear_chat(show_welcome=True)
+            self._set_connection_feedback(message, error=False, busy=False)
+            snack(self.page, message)
+        except Exception as exc:
+            logger.exception("Could not save and apply the Remote connection")
+            message = str(exc).strip() or "Hermes Remote connection failed"
+            try:
+                await self.app.disconnect_remote()
+                for name, value in previous_settings.items():
+                    setattr(settings, name, value)
+                if self.app.remote_secret_store:
+                    self.app.remote_secret_store.save(
+                        password=str(previous_secrets.get("password") or ""),
+                        token=str(previous_secrets.get("token") or ""),
+                    )
+                if not save_settings(settings):
+                    logger.error("Could not persist the previous Remote configuration")
+                if previous_connected and previous_settings["runtime_mode"] == "remote":
+                    await self.app.connect_remote(announce=False)
+            except Exception:
+                logger.exception("Could not restore the previous Remote connection")
+            self._set_connection_feedback(
+                f"Connection failed: {message}",
+                error=True,
+                busy=False,
+            )
+            snack(self.page, message, error=True)
+        finally:
+            self._saving = False
+            self._refresh()
 
     async def _disconnect(self):
         await self.app.disconnect_remote()

@@ -47,10 +47,10 @@ def close_dialog(page: ft.Page, dialog: ft.AlertDialog):
 
 
 def brand_mark(size: int = 32) -> ft.Control:
-    """Canonical Nous girl mark on its fixed white tile."""
+    """Canonical Hermes application mark shared with the Desktop launcher."""
     return ft.Container(
         content=ft.Image(
-            src="nous-girl.jpg",
+            src="icon.png",
             width=size,
             height=size,
             fit=ft.BoxFit.CONTAIN,
@@ -60,6 +60,40 @@ def brand_mark(size: int = 32) -> ft.Control:
         bgcolor="#FFFFFF",
         border_radius=ft.BorderRadius.all(max(4, size // 7)),
         clip_behavior=ft.ClipBehavior.HARD_EDGE,
+    )
+
+
+def hermes_mascot(size: int = 144) -> ft.Control:
+    """Canonical Hermes pixel mascot for spacious identity moments."""
+    return ft.Image(
+        src="hermes-mascot.png",
+        width=size,
+        height=size,
+        fit=ft.BoxFit.CONTAIN,
+        filter_quality=ft.FilterQuality.NONE,
+        semantics_label="Hermes",
+    )
+
+
+def hermes_welcome_art(size: int = 136) -> ft.Control:
+    """Hermes mascot framed by the original Mobile messenger halo."""
+    width = round(size * 1.75)
+    return ft.Stack(
+        [
+            ft.Image(
+                src="hermes-mobile-sigil.svg",
+                width=width,
+                height=round(size * 0.72),
+                fit=ft.BoxFit.CONTAIN,
+                filter_quality=ft.FilterQuality.HIGH,
+                opacity=0.72,
+                semantics_label="Hermes Mobile messenger halo",
+            ),
+            hermes_mascot(round(size * 0.84)),
+        ],
+        width=width,
+        height=size,
+        alignment=ft.Alignment.CENTER,
     )
 
 

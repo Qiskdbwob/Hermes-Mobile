@@ -231,6 +231,14 @@ class MobileAgent:
         """Resolve the API key from persisted settings, then profile env vars."""
         profile = self._get_provider_profile()
         canonical_name = profile.name if profile else self.provider
+        try:
+            from hermes_mobile.remote.secrets import ProviderSecretStore
+
+            secured = ProviderSecretStore(self.settings.get_data_dir()).get_key(canonical_name)
+            if secured:
+                return secured
+        except Exception:
+            logger.warning("Could not read the encrypted provider credential store")
         setting_names = {
             "openrouter": "openrouter_api_key",
             "openai": "openai_api_key",
@@ -249,6 +257,12 @@ class MobileAgent:
                 if value:
                     return value
         return ""
+
+    def reconfigure(self, *, provider: str, model: str) -> None:
+        """Apply a local route change without discarding conversation state."""
+        self.provider = str(provider).strip()
+        self.model = str(model).strip()
+        self._init_client()
 
     def _get_base_url(self) -> str:
         """Resolve the provider endpoint from its declarative profile."""

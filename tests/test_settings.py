@@ -1,14 +1,47 @@
 """Tests for settings module."""
 
+import json
+
 from hermes_mobile.config.settings import (
     HermesMobileSettings,
     _get_default_data_dir,
     get_settings,
     reload_settings,
+    save_settings,
 )
+from hermes_mobile.remote.secrets import ProviderSecretStore
 
 
 class TestHermesMobileSettings:
+    def test_api_keys_are_never_written_to_settings_json(self, temp_dir):
+        settings = HermesMobileSettings(
+            data_dir=str(temp_dir),
+            openrouter_api_key="plain-secret",
+        )
+
+        assert save_settings(settings) is True
+        assert "plain-secret" not in settings.settings_file().read_text()
+        assert "openrouter_api_key" not in settings.settings_file().read_text()
+
+    def test_legacy_plaintext_api_key_is_migrated_to_encrypted_store(self, temp_dir):
+        settings = HermesMobileSettings(data_dir=str(temp_dir))
+        settings.settings_file().write_text(
+            json.dumps(
+                {
+                    "default_provider": "openrouter",
+                    "default_model": "example/model",
+                    "openrouter_api_key": "legacy-secret",
+                }
+            )
+        )
+
+        settings.load_persisted()
+
+        assert ProviderSecretStore(temp_dir).get_key("openrouter") == "legacy-secret"
+        rewritten = settings.settings_file().read_text()
+        assert "legacy-secret" not in rewritten
+        assert "openrouter_api_key" not in rewritten
+
     def test_default_values(self):
         """Default settings should have expected defaults."""
         s = HermesMobileSettings()

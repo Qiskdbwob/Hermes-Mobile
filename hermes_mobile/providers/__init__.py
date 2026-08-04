@@ -347,6 +347,59 @@ def list_providers() -> List[ProviderProfile]:
     return result
 
 
+def list_local_providers() -> List[ProviderProfile]:
+    """Return only providers this Android runtime can call honestly."""
+    return [
+        profile
+        for profile in list_providers()
+        if profile.api_mode == "chat_completions" and profile.name != "ollama"
+    ]
+
+
+async def fetch_provider_models(
+    profile: ProviderProfile,
+    api_key: str = "",
+    *,
+    client: Any = None,
+) -> List[str]:
+    """Fetch and normalize the provider's current model catalog."""
+    import httpx
+
+    if not profile.models_url:
+        return list(profile.fallback_models)
+    owns_client = client is None
+    http = client or httpx.AsyncClient(timeout=20.0)
+    headers: Dict[str, str] = {}
+    params: Dict[str, str] = {}
+    if profile.name == "google":
+        if api_key:
+            params["key"] = api_key
+    elif api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        response = await http.get(profile.models_url, headers=headers, params=params)
+        response.raise_for_status()
+        payload = response.json()
+    finally:
+        if owns_client:
+            await http.aclose()
+    raw = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(raw, list) and isinstance(payload, dict):
+        raw = payload.get("models")
+    models: list[str] = []
+    for item in raw if isinstance(raw, list) else []:
+        if isinstance(item, str):
+            model = item
+        elif isinstance(item, dict):
+            model = str(item.get("id") or item.get("name") or item.get("model") or "")
+        else:
+            continue
+        model = model.removeprefix("models/").strip()
+        if model:
+            models.append(model)
+    return sorted(set(models), key=str.lower) or list(profile.fallback_models)
+
+
 def _discover_providers() -> None:
     """Populate the registry with built-in providers."""
     global _DISCOVERED

@@ -2,6 +2,9 @@
 
 from unittest.mock import patch
 
+import httpx
+import pytest
+
 from hermes_mobile.providers import (
     _DISCOVERED,
     AnthropicProfile,
@@ -15,7 +18,9 @@ from hermes_mobile.providers import (
     TogetherProfile,
     XAIProfile,
     _profile_user_agent,
+    fetch_provider_models,
     get_provider_profile,
+    list_local_providers,
     list_providers,
     register_provider,
 )
@@ -124,6 +129,24 @@ class TestBuiltinProfiles:
         assert "deepseek" in names
         assert "xai" in names
         assert "ollama" in names
+
+    def test_local_provider_catalog_excludes_unimplemented_routes(self):
+        names = [profile.name for profile in list_local_providers()]
+        assert names == ["openrouter", "openai", "google", "groq", "together", "deepseek", "xai"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_provider_models_normalizes_openai_and_google_shapes():
+    async def run(profile, payload):
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await fetch_provider_models(profile, "secret", client=client)
+
+    assert await run(OpenAIProfile(), {"data": [{"id": "gpt-z"}, {"id": "gpt-a"}]}) == [
+        "gpt-a",
+        "gpt-z",
+    ]
+    assert await run(GoogleProfile(), {"models": [{"name": "models/gemini-x"}]}) == ["gemini-x"]
 
 
 class TestGetProviderProfile:
