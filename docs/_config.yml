@@ -3,5 +3,5 @@ description: Mobile AI agent for Android — a Flet port of Hermes Agent
 baseurl: /Hermes-Mobile
 url: https://plcunha.github.io
 theme: jekyll-theme-minimal
-logo: /Hermes-Mobile/assets/icon.png
+logo: https://raw.githubusercontent.com/plcunha/Hermes-Mobile/main/assets/icon.png
 show_downloads: false

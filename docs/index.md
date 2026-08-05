@@ -6,7 +6,7 @@ layout: default
 
 A mobile AI agent for Android. Port of [Hermes Agent](https://github.com/NousResearch/hermes-agent) by [Nous Research](https://nousresearch.com).
 
-<img src="/Hermes-Mobile/assets/hero.png" alt="Hermes Mobile" width="100%">
+<img src="https://raw.githubusercontent.com/plcunha/Hermes-Mobile/main/assets/hero.png" alt="Hermes Mobile" width="100%">
 
 ---
 
