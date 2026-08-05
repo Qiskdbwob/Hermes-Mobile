@@ -32,6 +32,7 @@ Hermes Mobile puts a full AI agent on your phone. It's not a ChatGPT wrapper —
 - [Providers](providers) — API keys, switching models
 - [Hermes Remote](hermes-remote) — connect to a `hermes serve` backend
 - [Building from Source](building) — compile your own APK
+- [Screenshots](screenshots) — real APK screenshots, no mockups
 
 ---
 
