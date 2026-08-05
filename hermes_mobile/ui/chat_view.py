@@ -498,6 +498,13 @@ class ChatView:
         self.chat_list.controls.append(self._streaming_container)
         self._scroll_to_bottom()
 
+    def _render_messages(self) -> None:
+        """Re-render the chat list from self.messages (used by /undo, /retry)."""
+        self.chat_list.controls.clear()
+        for msg in self.messages:
+            self._add_message_bubble(msg)
+        self._scroll_to_bottom()
+
     def _build_markdown(self, text: str) -> ft.Control:
         """Render an assistant message as markdown."""
         c = mode_colors(self.app.dark_mode)
