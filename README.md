@@ -13,6 +13,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
   <a href="https://github.com/NousResearch/hermes-agent"><img src="https://img.shields.io/badge/Based%20on-Hermes%20Agent-blueviolet?style=for-the-badge" alt="Based on Hermes Agent"></a>
   <a href="https://flet.dev/"><img src="https://img.shields.io/badge/Built%20with-Flet-0053FD?style=for-the-badge" alt="Built with Flet"></a>
+  <a href="https://github.com/plcunha/Hermes-Mobile/releases"><img src="https://img.shields.io/badge/Download-APK-blue?style=for-the-badge" alt="Download APK"></a>
 </p>
 
 ---
