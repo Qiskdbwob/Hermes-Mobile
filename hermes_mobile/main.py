@@ -931,9 +931,60 @@ class HermesMobileApp:
         if self.chat_view:
             self.chat_view.on_message(message)
 
+    async def _handle_slash_command(self, text: str):
+        """Process local slash commands before they reach the agent loop."""
+        cmd = text.strip().lower()
+        parts = cmd.split(None, 1)
+        command = parts[0].lstrip("/")
+        arg = parts[1] if len(parts) > 1 else ""
+
+        if command in ("new", "reset"):
+            self._start_new_session()
+        elif command in ("stop", "interrupt", "cancel"):
+            await self.interrupt_turn()
+        elif command == "model" and arg:
+            self.settings.default_model = arg
+            if self.remote_client:
+                self.remote_client.model = arg
+            elif self.agent:
+                self.agent.model = arg
+                self.agent._init_client()
+            snack(self.page, f"Model changed to {arg}")
+            self._app_bar_subtitle.value = arg.split("/")[-1] if "/" in arg else arg
+            self.page.update()
+        elif command == "provider" and arg:
+            self.settings.default_provider = arg
+            snack(self.page, f"Provider changed to {arg}")
+            self.page.update()
+        elif command == "undo":
+            if self.chat_view and self.chat_view.messages:
+                self.chat_view.messages.pop()
+                if self.chat_view.messages:
+                    self.chat_view.messages.pop()
+                self.chat_view._render_messages()
+                self.page.update()
+        elif command == "retry":
+            if self.chat_view and self.chat_view.messages:
+                self.chat_view.messages.pop()
+                self.chat_view._render_messages()
+                self.page.update()
+                last_user = ""
+                for msg in reversed(self.chat_view.messages):
+                    if msg.get("role") == "user":
+                        last_user = msg.get("content", "")
+                        break
+                if last_user:
+                    await self.send_message(last_user)
+        else:
+            snack(self.page, f"Unknown command: /{command}")
+
     async def send_message(self, text: str):
         """Send one turn through the selected local or remote runtime."""
         if not text.strip() or self.chat_view is None:
+            return
+
+        if text.startswith("/") and not text.startswith("//"):
+            await self._handle_slash_command(text)
             return
 
         self.chat_view.set_busy(True)

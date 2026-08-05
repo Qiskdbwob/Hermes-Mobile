@@ -578,8 +578,13 @@ class RemoteHermesClient:
         return session
 
     async def submit_prompt(self, text: str) -> Mapping[str, Any]:
+        """Submit a prompt. Resumes the stored session if one is set but no
+        live session exists - this prevents the common bug where tapping a
+        session and sending a message silently creates a new session."""
         if not str(text or "").strip():
             raise ValueError("Prompt cannot be empty")
+        if self.session_id is None and self.stored_session_id:
+            await self.resume_session(self.stored_session_id)
         if self.session_id is None:
             await self.create_session()
         result = await self.request(

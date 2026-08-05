@@ -123,8 +123,10 @@ class SessionsView:
         self.app = app
         self.page = app.page
         settings = app.settings
+        pin_dir = settings.get_data_dir() / "ui"
+        pin_dir.mkdir(parents=True, exist_ok=True)
         self.pin_store = SessionPinStore(
-            settings.get_data_dir() / "ui" / "session-pins.json",
+            pin_dir / "session-pins.json",
             self._pin_scope(),
         )
         self.pinned_ids = self.pin_store.load()
