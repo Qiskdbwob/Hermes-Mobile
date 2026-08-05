@@ -157,6 +157,8 @@ class SessionsView:
     def _pin_scope(self) -> str:
         settings = self.app.settings
         remote_url = str(getattr(settings, "remote_url", "") or "").rstrip("/")
+        if not remote_url:
+            remote_url = "local"
         profile = str(getattr(settings, "remote_profile", "") or "default").strip() or "default"
         return f"{remote_url}|{profile}"
 

@@ -706,6 +706,7 @@ class HermesMobileApp:
         self.chat_view.load_remote_history(result.get("messages") or [])
         self.current_session_title = title
         self._navigate_to("chat")
+        self.page.update()
         self._app_bar_title.value = title
         self.page.update()
 
@@ -989,6 +990,7 @@ class HermesMobileApp:
 
         self.chat_view.set_busy(True)
         self.chat_view.add_user_message(text)
+        self.page.update()
         if self.remote_mode:
             self.chat_view.set_status("Connecting to Hermes Remote…")
             try:
