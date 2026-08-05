@@ -933,51 +933,152 @@ class HermesMobileApp:
             self.chat_view.on_message(message)
 
     async def _handle_slash_command(self, text: str):
-        """Process local slash commands before they reach the agent loop."""
-        cmd = text.strip().lower()
+        """Process slash commands locally, matching Hermes Desktop parity."""
+        cmd = text.strip()
         parts = cmd.split(None, 1)
-        command = parts[0].lstrip("/")
+        command = parts[0].lstrip("/").lower()
         arg = parts[1] if len(parts) > 1 else ""
 
+        # Session management
         if command in ("new", "reset"):
             self._start_new_session()
         elif command in ("stop", "interrupt", "cancel"):
             await self.interrupt_turn()
-        elif command == "model" and arg:
-            self.settings.default_model = arg
-            if self.remote_client:
-                self.remote_client.model = arg
-            elif self.agent:
-                self.agent.model = arg
-                self.agent._init_client()
-            snack(self.page, f"Model changed to {arg}")
-            self._app_bar_subtitle.value = arg.split("/")[-1] if "/" in arg else arg
-            self.page.update()
-        elif command == "provider" and arg:
-            self.settings.default_provider = arg
-            snack(self.page, f"Provider changed to {arg}")
-            self.page.update()
+
+        # Model / provider
+        elif command == "model":
+            if arg:
+                self.settings.default_model = arg
+                if self.remote_client:
+                    self.remote_client.model = arg
+                elif self.agent:
+                    self.agent.model = arg
+                    self.agent._init_client()
+                snack(self.page, f"Model: {arg}")
+                short = arg.split("/")[-1] if "/" in arg else arg
+                if hasattr(self, "_app_bar_subtitle"):
+                    self._app_bar_subtitle.value = short
+                self.page.update()
+            else:
+                model = self.remote_model if self.remote_mode else self.settings.default_model
+                snack(self.page, f"Current model: {model}")
+        elif command == "provider":
+            if arg:
+                self.settings.default_provider = arg
+                snack(self.page, f"Provider: {arg}")
+                self.page.update()
+            else:
+                snack(self.page, f"Current provider: {self.settings.default_provider}")
+
+        # History
         elif command == "undo":
             if self.chat_view and self.chat_view.messages:
-                self.chat_view.messages.pop()
-                if self.chat_view.messages:
-                    self.chat_view.messages.pop()
+                msgs = self.chat_view.messages
+                msgs.pop()
+                if msgs and msgs[-1].role != "user":
+                    msgs.pop()
                 self.chat_view._render_messages()
                 self.page.update()
         elif command == "retry":
             if self.chat_view and self.chat_view.messages:
-                self.chat_view.messages.pop()
+                msgs = self.chat_view.messages
+                msgs.pop()
                 self.chat_view._render_messages()
                 self.page.update()
-                last_user = ""
-                for msg in reversed(self.chat_view.messages):
-                    if msg.get("role") == "user":
-                        last_user = msg.get("content", "")
-                        break
-                if last_user:
-                    await self.send_message(last_user)
+                for msg in reversed(msgs):
+                    if msg.role == "user":
+                        await self.send_message(msg.content)
+                        return
+                snack(self.page, "Nothing to retry")
+
+        # Info
+        elif command == "help":
+            lines = [
+                "**Available commands**",
+                "",
+                "`/new`, `/reset` — new session",
+                "`/stop` — interrupt agent",
+                "`/model [name]` — show/set model",
+                "`/provider [name]` — show/set provider",
+                "`/undo` — remove last exchange",
+                "`/retry` — resend last message",
+                "`/status` — agent & session info",
+                "`/usage` — token usage estimate",
+                "`/version` — app version",
+                "`/tools` — tool count",
+                "`/skills` — skill count",
+                "`/sessions` — open session browser",
+                "`/settings` — open settings",
+                "`/compress` — compress context",
+                "`/help` — this list",
+            ]
+            from hermes_mobile.ui.chat_view import Message
+            msg = Message.assistant("\n".join(lines))
+            self.chat_view.messages.append(msg)
+            self.chat_view._add_message_bubble(msg)
+            self.page.update()
+        elif command == "status":
+            model = self.remote_model if self.remote_mode else self.settings.default_model
+            provider = self.settings.default_provider
+            mode = "Remote" if self.remote_mode else "Local"
+            title = self.current_session_title
+            msgs = len(self.chat_view.messages) if self.chat_view else 0
+            info = f"Mode: {mode}\nModel: {provider}/{model}\nSession: {title}\nMessages: {msgs}"
+            if self.remote_mode and self.remote_client:
+                info += f"\nGateway: {self.remote_client.state}"
+            snack(self.page, info)
+        elif command == "usage":
+            msgs = len(self.chat_view.messages) if self.chat_view else 0
+            est = msgs * 200
+            snack(self.page, f"~{msgs} messages, est. ~{est} tokens")
+        elif command == "version":
+            from hermes_mobile import __version__
+            snack(self.page, f"Hermes Mobile v{__version__}")
+        elif command == "tools":
+            if self.agent:
+                n = len(self.agent._builtin_tools)
+                snack(self.page, f"{n} tool handlers available")
+            else:
+                snack(self.page, "Agent not initialized")
+        elif command == "skills":
+            mgr = getattr(self.agent, "skill_manager", None) if self.agent else None
+            if mgr:
+                names = getattr(mgr, "list_skills", lambda: [])()
+                snack(self.page, f"{len(names)} skills loaded")
+            else:
+                snack(self.page, "Skill manager not available")
+
+        # Navigation
+        elif command == "sessions":
+            if hasattr(self, "show_remote_sessions"):
+                await self.show_remote_sessions()
+            else:
+                snack(self.page, "Sessions not available in this mode")
+        elif command == "settings":
+            self._navigate_to("settings")
+        elif command == "memory":
+            self._navigate_to("memory")
+        elif command == "cron":
+            self._navigate_to("cron")
+        elif command == "gateway":
+            self._navigate_to("gateway")
+
+        # Compression
+        elif command == "compress":
+            if self.agent and hasattr(self.agent, "_apply_compression"):
+                before = len(self.agent.messages)
+                self.agent.messages = self.agent._apply_compression()
+                after = len(self.agent.messages)
+                snack(self.page, f"Compressed: {before} -> {after} messages")
+            else:
+                snack(self.page, "Compression not available")
+
+        # Direct chat fallback — double-slash sends as message
+        elif text.startswith("//"):
+            await self.send_message(text[1:])
+
         else:
-            snack(self.page, f"Unknown command: /{command}")
+            snack(self.page, f"Unknown command: /{command}. Type /help for available commands")
 
     async def send_message(self, text: str):
         """Send one turn through the selected local or remote runtime."""
