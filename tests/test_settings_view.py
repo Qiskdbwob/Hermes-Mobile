@@ -4,6 +4,7 @@ import flet as ft
 import pytest
 
 from hermes_mobile.config.settings import HermesMobileSettings
+from hermes_mobile.locales import get_locale, init
 from hermes_mobile.providers import list_local_providers
 from hermes_mobile.ui.settings_view import SettingsView
 
@@ -11,9 +12,15 @@ from hermes_mobile.ui.settings_view import SettingsView
 class Page:
     def __init__(self):
         self.updated = 0
+        self.overlay = []
+        self.dialogs = []
 
     def update(self):
         self.updated += 1
+
+    def show_dialog(self, dialog):
+        dialog.open = True
+        self.dialogs.append(dialog)
 
 
 class Agent:
@@ -29,6 +36,7 @@ class RemoteClient:
 
     def __init__(self):
         self.selected = []
+        self.disabled = 0
 
     async def get_model_options(self, *, refresh=False):
         return {
@@ -44,7 +52,7 @@ class RemoteClient:
 
     async def get_pet_gallery(self, *, local_only=False):
         return {
-            "enabled": True,
+            "enabled": False,
             "active": "pool-dog",
             "pets": [
                 {
@@ -60,6 +68,7 @@ class RemoteClient:
         return {"ok": True, "slug": slug}
 
     async def disable_pet(self):
+        self.disabled += 1
         return {"ok": True}
 
 
@@ -75,7 +84,7 @@ def walk(control):
 def texts(control):
     values = []
     for item in walk(control):
-        for attr in ("value", "text", "label"):
+        for attr in ("value", "text", "label", "content"):
             value = getattr(item, attr, None)
             if isinstance(value, str):
                 values.append(value)
@@ -103,10 +112,16 @@ def make_app(tmp_path, *, remote=False):
         content_area=SimpleNamespace(content=None),
     )
     app.pet_refreshes = 0
+    app.theme_applied = []
+    app.pet_view = SimpleNamespace(set_activity=lambda state: None)
+
+    def apply_theme(theme):
+        app.theme_applied.append(theme)
 
     async def refresh_pet():
         app.pet_refreshes += 1
 
+    app.apply_theme = apply_theme
     app.refresh_pet = refresh_pet
     return app
 
@@ -122,17 +137,19 @@ def test_local_settings_are_registry_driven_and_keys_use_encrypted_store(tmp_pat
 
     view._on_api_key_change("deepseek", "deep-secret")
 
-    assert view.provider_secrets.get_key("deepseek") == "deep-secret"
+    assert view.provider_secrets.get_key("deepseek") == ""
+    assert view._draft_key("deepseek") == "deep-secret"
     assert (
         "deep-secret" not in app.settings.settings_file().read_text()
         if app.settings.settings_file().exists()
         else True
     )
-    assert app.agent.routes[-1] == ("openrouter", "anthropic/claude-3.5-sonnet")
+    assert app.agent.routes == []
 
     controls = view._build_provider_controls()
     assert all(isinstance(control, ft.Row) for control in controls[:3])
     assert all(control.controls[0].expand for control in controls[:3])
+    view._on_tab_change("appearance")
     assert any(value.lower() == "petdex" for value in texts(view.build()))
 
 
@@ -164,8 +181,9 @@ async def test_model_inventory_sets_default_only_when_configuration_is_empty(tmp
     monkeypatch.setattr("hermes_mobile.ui.settings_view.fetch_provider_models", catalog)
     await view.refresh_local_models(force=True)
 
-    assert app.settings.default_model == "catalog/first"
-    assert app.agent.routes[-1] == ("openrouter", "catalog/first")
+    assert app.settings.default_model == ""
+    assert view.draft.default_model == "catalog/first"
+    assert app.agent.routes == []
 
 
 @pytest.mark.asyncio
@@ -174,7 +192,10 @@ async def test_remote_settings_use_backend_inventory_without_local_api_fields(tm
     view = SettingsView(app)
 
     await view.refresh_remote_models()
-    root = view.build()
+    provider_root = view.build()
+    view._on_tab_change("appearance")
+    appearance_root = view.build()
+    root = ft.Column([provider_root, appearance_root])
     labels = texts(root)
 
     assert view.remote_providers[0]["slug"] == "openai-codex"
@@ -194,7 +215,128 @@ async def test_remote_petdex_loads_selects_and_refreshes_global_pet(tmp_path):
     event = SimpleNamespace(control=SimpleNamespace(value="pool-dog"))
     await view._on_pet_select(event)
 
-    assert view.pet_gallery["active"] == "pool-dog"
+    assert view._draft_pet == {"active": "pool-dog", "enabled": True}
+    assert app.remote_client.selected == []
+    assert app.pet_refreshes == 0
+    assert await view._commit_draft()
     assert app.remote_client.selected == ["pool-dog"]
     assert app.pet_refreshes == 1
+    view._on_tab_change("appearance")
     assert "Pool Dog" in texts(view.build())
+
+
+def test_tabs_render_only_the_selected_domain_and_preserve_draft(tmp_path):
+    app = make_app(tmp_path)
+    view = SettingsView(app)
+
+    provider_labels = texts(view.build())
+    assert "Default Provider" in provider_labels
+    assert "Temperature" not in provider_labels
+    assert {"Provider", "Agent", "Memory", "Appearance", "Advanced"}.issubset(set(provider_labels))
+
+    view._on_model_change(SimpleNamespace(control=SimpleNamespace(value="draft/model")))
+    view._on_tab_change("agent")
+    agent_labels = texts(view.build())
+
+    assert "Temperature" in agent_labels
+    assert "Default Provider" not in agent_labels
+    assert view.draft.default_model == "draft/model"
+    assert app.settings.default_model == "anthropic/claude-3.5-sonnet"
+    assert view._dirty_domains() == ["provider"]
+
+
+@pytest.mark.asyncio
+async def test_commit_persists_once_and_reconfigures_once(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    view = SettingsView(app)
+    saves = []
+
+    def save(candidate):
+        saves.append((candidate.default_model, candidate.temperature))
+        return True
+
+    monkeypatch.setattr("hermes_mobile.ui.settings_view.save_settings", save)
+    view._on_model_change(SimpleNamespace(control=SimpleNamespace(value="openai/gpt-5")))
+    view._on_temperature_change(SimpleNamespace(control=SimpleNamespace(value=0.4)))
+    view._on_timeout_change(SimpleNamespace(control=SimpleNamespace(value="20")))
+    view._on_api_key_change("openrouter", "staged-secret")
+
+    assert app.settings.default_model == "anthropic/claude-3.5-sonnet"
+    assert app.settings.temperature != 0.4
+    assert view.provider_secrets.get_key("openrouter") == ""
+    assert app.agent.routes == []
+
+    assert await view._commit_draft()
+    assert saves == [("openai/gpt-5", 0.4)]
+    assert app.settings.default_model == "openai/gpt-5"
+    assert app.settings.temperature == 0.4
+    assert app.settings.request_timeout == 20
+    assert view.provider_secrets.get_key("openrouter") == "staged-secret"
+    assert app.agent.routes == [("openrouter", "openai/gpt-5")]
+    assert view._dirty_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_failed_commit_rolls_back_settings_and_secret(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    view = SettingsView(app)
+    original_model = app.settings.default_model
+    save_results = iter([False, True])
+    monkeypatch.setattr(
+        "hermes_mobile.ui.settings_view.save_settings", lambda candidate: next(save_results)
+    )
+    view._on_model_change(SimpleNamespace(control=SimpleNamespace(value="broken/model")))
+    view._on_api_key_change("openrouter", "must-not-stick")
+
+    assert not await view._commit_draft()
+    assert app.settings.default_model == original_model
+    assert view.provider_secrets.get_key("openrouter") == ""
+    assert app.agent.routes == []
+    assert view._dirty_count() == 2
+
+
+def test_discard_and_save_confirmation_have_no_side_effects(tmp_path):
+    app = make_app(tmp_path)
+    view = SettingsView(app)
+    view.build()
+    disabled_style = view._save_button.style
+    assert view._save_button.disabled is True
+    original_theme = app.settings.theme
+    view._on_theme_change(SimpleNamespace(control=SimpleNamespace(value="light")))
+
+    assert app.settings.theme == original_theme
+    assert app.theme_applied == []
+    assert view._save_button.disabled is False
+    assert view._save_button.style != disabled_style
+    view._on_save()
+    assert len(app.page.dialogs) == 1
+    assert "Save settings" in str(app.page.dialogs[0].title.value)
+    assert app.settings.theme == original_theme
+
+    view._on_discard()
+    assert view.draft.theme == original_theme
+    assert view._dirty_count() == 0
+    assert app.theme_applied == []
+
+
+@pytest.mark.asyncio
+async def test_appearance_applies_only_after_successful_save(tmp_path):
+    init("en")
+    try:
+        app = make_app(tmp_path)
+        view = SettingsView(app)
+        view._on_language_change(SimpleNamespace(control=SimpleNamespace(value="pt-br")))
+        view._on_theme_change(SimpleNamespace(control=SimpleNamespace(value="light")))
+
+        assert app.settings.language == "en"
+        assert app.settings.theme != "light"
+        assert get_locale() == "en"
+        assert app.theme_applied == []
+
+        assert await view._commit_draft()
+        assert app.settings.language == "pt-br"
+        assert app.settings.theme == "light"
+        assert get_locale() == "pt-br"
+        assert app.theme_applied == ["light"]
+    finally:
+        init("en")

@@ -1,0 +1,21 @@
+---
+name: Feature Request
+description: Propose a new feature or enhancement
+labels: [enhancement]
+body:
+  - type: textarea
+    attributes:
+      label: Proposal
+      description: What should Hermes Mobile do?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Why
+      description: What problem does this solve? Who benefits?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Alternatives
+      description: What workarounds exist today? What other approaches did you consider?

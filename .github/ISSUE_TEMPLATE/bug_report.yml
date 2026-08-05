@@ -1,0 +1,33 @@
+---
+name: Bug Report
+description: File a bug report
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: Description
+      description: What happened? What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Steps to reproduce
+      description: Exact steps to trigger the bug.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Python version
+      placeholder: "3.12.3"
+  - type: input
+    attributes:
+      label: Flet version
+      placeholder: "0.86.5"
+  - type: input
+    attributes:
+      label: OS / Android version
+      placeholder: "Android 14"
+  - type: textarea
+    attributes:
+      label: Logs or error output
+      description: Paste relevant logcat, tracebacks, or error messages.

@@ -6,12 +6,15 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
-  lint:
+  lint-and-test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.9", "3.11"]
+        python-version: ["3.9", "3.12"]
 
     steps:
       - uses: actions/checkout@v4
@@ -33,4 +36,4 @@ jobs:
         run: ruff format --check .
 
       - name: Test with pytest
-        run: python -m pytest tests/ -v --tb=short
+        run: python -m pytest tests/ -q --tb=short

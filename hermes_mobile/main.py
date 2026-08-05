@@ -16,7 +16,7 @@ from hermes_mobile.gateway.mobile_gateway import (
     GatewayConfig,
     GatewayManager,
 )
-from hermes_mobile.locales import t
+from hermes_mobile.locales import set_locale, t
 from hermes_mobile.memory.provider import MobileMemoryProvider
 from hermes_mobile.plugins import get_plugin_registry
 from hermes_mobile.remote import RemoteEvent, RemoteHermesClient, RemoteSecretStore
@@ -108,6 +108,7 @@ class HermesMobileApp:
         # Settings must load before _setup_page so the theme applies
         try:
             self.settings = get_settings()
+            set_locale(str(getattr(self.settings, "language", "en") or "en"))
         except Exception as e:
             logger.error("Failed to load settings: %s", e, exc_info=True)
             self.settings = None
