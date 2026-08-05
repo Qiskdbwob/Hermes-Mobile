@@ -16,8 +16,10 @@ from hermes_mobile.ui.common import (
     open_dialog,
     page_scaffold,
     section_header,
+    section_label,
     snack,
 )
+from hermes_mobile.ui.theme import mode_colors
 
 
 class SettingsView:
@@ -174,13 +176,25 @@ class SettingsView:
         )
 
     def _build_pet_controls(self) -> list[ft.Control]:
+        dark = self.app.dark_mode
+        colors = mode_colors(dark)
+        title = section_label(dark, t("settings.pet_title"))
         if str(self.settings.runtime_mode) != "remote":
             return [
-                ft.Text(
-                    t("settings.pet_local_hint"),
-                    size=12,
-                    color=ft.Colors.OUTLINE,
-                )
+                title,
+                ft.Row(
+                    [
+                        ft.Icon(ft.Icons.PETS_OUTLINED, size=20, color=colors["muted_foreground"]),
+                        ft.Text(
+                            t("settings.pet_local_hint"),
+                            size=12,
+                            color=colors["muted_foreground"],
+                            expand=True,
+                        ),
+                    ],
+                    spacing=10,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
             ]
         pets = self.pet_gallery.get("pets") or []
         active = str(self.pet_gallery.get("active") or "")
@@ -191,6 +205,7 @@ class SettingsView:
             else t("settings.pet_count", count=len(pets))
         )
         return [
+            title,
             ft.Dropdown(
                 label=t("settings.pet_label"),
                 value=active if active else None,
@@ -238,10 +253,15 @@ class SettingsView:
                 state=t("settings.api_saved") if key else t("settings.api_required"),
             )
         )
+        provider = self._build_provider_dropdown()
+        model = self._build_model_dropdown()
+        api_key = self._build_api_key_field(display, self.settings.default_provider)
+        for control in (provider, model, api_key):
+            control.expand = True
         return [
-            self._build_provider_dropdown(),
-            self._build_model_dropdown(),
-            self._build_api_key_field(display, self.settings.default_provider),
+            ft.Row([provider], spacing=0),
+            ft.Row([model], spacing=0),
+            ft.Row([api_key], spacing=0),
             ft.Row(
                 [
                     flat_button(

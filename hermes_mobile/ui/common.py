@@ -22,12 +22,20 @@ MONO_FONT = "monospace"
 def snack(page: ft.Page, text: str, error: bool = False):
     """Show a themed snack bar."""
     c = mode_colors(getattr(page, "theme_mode", None) == ft.ThemeMode.DARK)
+    platform = str(
+        getattr(getattr(page, "platform", None), "value", getattr(page, "platform", ""))
+    ).lower()
+    width = getattr(page, "width", None)
+    is_phone = platform in {"android", "ios"} or (
+        isinstance(width, (int, float)) and 0 < width <= 600
+    )
     content = ft.Text(text, color=c["destructive"] if error else c["foreground"])
     sb = ft.SnackBar(
         content=content,
         bgcolor=c["popover"],
         behavior=ft.SnackBarBehavior.FLOATING,
         elevation=0,
+        margin=ft.Margin.only(left=12, right=12, bottom=96 if is_phone else 12),
         shape=ft.RoundedRectangleBorder(radius=8),
     )
     sb.open = True

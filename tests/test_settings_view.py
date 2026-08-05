@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import flet as ft
 import pytest
 
 from hermes_mobile.config.settings import HermesMobileSettings
@@ -129,6 +130,11 @@ def test_local_settings_are_registry_driven_and_keys_use_encrypted_store(tmp_pat
     )
     assert app.agent.routes[-1] == ("openrouter", "anthropic/claude-3.5-sonnet")
 
+    controls = view._build_provider_controls()
+    assert all(isinstance(control, ft.Row) for control in controls[:3])
+    assert all(control.controls[0].expand for control in controls[:3])
+    assert any(value.lower() == "petdex" for value in texts(view.build()))
+
 
 @pytest.mark.asyncio
 async def test_model_inventory_refresh_never_rewrites_configured_model(tmp_path, monkeypatch):
@@ -172,6 +178,7 @@ async def test_remote_settings_use_backend_inventory_without_local_api_fields(tm
     labels = texts(root)
 
     assert view.remote_providers[0]["slug"] == "openai-codex"
+    assert any(value.lower() == "petdex" for value in labels)
     assert "OpenAI Codex" in labels
     assert "gpt-5.6-sol" in labels
     assert not any("API Key" in value for value in labels)
