@@ -77,6 +77,8 @@ class HermesMobileApp:
         self.remote_model = ""
         self.remote_error = ""
         self.current_session_title = t("chat.new_session")
+        self._resumed_session_id: str | None = None
+        self._resumed_stored_id: str | None = None
         self.remote_secret_store: RemoteSecretStore | None = None
         self._remote_connect_lock = asyncio.Lock()
         self._remote_tool_calls: dict[str, ToolCall] = {}
@@ -700,6 +702,8 @@ class HermesMobileApp:
             snack(self.page, str(exc), error=True)
             return
         self.activate_remote_session_result(result, title)
+        self._resumed_stored_id = session_id
+        self._resumed_session_id = client.session_id
 
     def activate_remote_session_result(self, result: Mapping[str, Any], title: str) -> None:
         """Render a session result that is already active in the remote runtime."""
@@ -731,7 +735,11 @@ class HermesMobileApp:
                 snack(self.page, "Set a Remote URL first", error=True)
             return False
 
+        previous_session_id = None
+        previous_stored_id = None
         if self.remote_client is not None:
+            previous_session_id = self.remote_client.session_id
+            previous_stored_id = self.remote_client.stored_session_id
             await self.remote_client.close()
         secrets = self.remote_secret_store.load()
         client = RemoteHermesClient(
@@ -747,6 +755,10 @@ class HermesMobileApp:
             on_state=self._on_remote_state,
         )
         self.remote_client = client
+        if previous_session_id:
+            client.session_id = previous_session_id
+        if previous_stored_id:
+            client.stored_session_id = previous_stored_id
         self.remote_error = ""
         try:
             self.remote_status = await client.connect()
@@ -911,6 +923,8 @@ class HermesMobileApp:
         if self.remote_client is not None:
             self.remote_client.session_id = None
             self.remote_client.stored_session_id = None
+        self._resumed_session_id = None
+        self._resumed_stored_id = None
         self._remote_tool_calls.clear()
         self.current_session_title = t("chat.new_session")
         self._navigate_to("chat")
