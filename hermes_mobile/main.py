@@ -83,6 +83,7 @@ class HermesMobileApp:
         self._remote_connect_lock = asyncio.Lock()
         self._remote_tool_calls: dict[str, ToolCall] = {}
         self._active_local_turn: asyncio.Task | None = None
+        self._message_queue: list[str] = []
 
         # UI Components
         self.chat_view: ChatView = None
@@ -473,18 +474,20 @@ class HermesMobileApp:
 
         self._app_bar_title = ft.Text(
             t("chat.new_session"),
-            size=14,
+            size=13,
             weight=ft.FontWeight.W_600,
             color=c["foreground"],
             max_lines=1,
             overflow=ft.TextOverflow.ELLIPSIS,
+            no_wrap=True,
         )
         self._app_bar_subtitle = ft.Text(
             f"{provider} · {short_model}",
-            size=10,
+            size=9,
             color=c["muted_foreground"],
             max_lines=1,
             overflow=ft.TextOverflow.ELLIPSIS,
+            no_wrap=True,
         )
 
         self._app_bar_leading = ft.Container(
@@ -496,10 +499,9 @@ class HermesMobileApp:
             content=ft.Row(
                 [
                     self._app_bar_leading,
-                    ft.Container(width=2),
                     ft.Column(
                         [self._app_bar_title, self._app_bar_subtitle],
-                        spacing=0,
+                        spacing=-2,
                         alignment=ft.MainAxisAlignment.CENTER,
                         expand=True,
                     ),
@@ -508,10 +510,10 @@ class HermesMobileApp:
                     self._new_session_button,
                     overflow_menu,
                 ],
-                spacing=6,
+                spacing=4,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.Padding.only(left=12, right=4, top=8, bottom=8),
+            padding=ft.Padding.only(left=10, right=2, top=6, bottom=6),
             bgcolor=c["sidebar"],
             border=ft.Border.only(bottom=ft.BorderSide(1, c["sidebar_border"])),
         )
@@ -860,6 +862,9 @@ class HermesMobileApp:
             if self.pet_view is not None:
                 self.pet_view.flash_activity("wave")
             self.chat_view.set_status("")
+            if self._message_queue:
+                next_msg = self._message_queue.pop(0)
+                asyncio.create_task(self.send_message(next_msg))
         elif event.type == "tool.start":
             tool_id = str(payload.get("tool_id") or payload.get("id") or "remote-tool")
             arguments = payload.get("args") if isinstance(payload.get("args"), dict) else {}
@@ -963,11 +968,14 @@ class HermesMobileApp:
         elif command == "model":
             if arg:
                 self.settings.default_model = arg
-                if self.remote_client:
+                if self.remote_mode and self.remote_client:
                     self.remote_client.model = arg
                 elif self.agent:
                     self.agent.model = arg
-                    self.agent._init_client()
+                    if hasattr(self.agent, "_init_client"):
+                        self.agent._init_client()
+                elif not self.remote_mode:
+                    snack(self.page, f"Model set to {arg} (takes effect on next session)")
                 snack(self.page, f"Model: {arg}")
                 short = arg.split("/")[-1] if "/" in arg else arg
                 if hasattr(self, "_app_bar_subtitle"):
@@ -1103,6 +1111,11 @@ class HermesMobileApp:
             await self._handle_slash_command(text)
             return
 
+        if self.chat_view._sending:
+            self._message_queue.append(text)
+            snack(self.page, f"Queued ({len(self._message_queue)} pending)")
+            return
+
         self.chat_view.set_busy(True)
         self.chat_view.add_user_message(text)
         self.page.update()
@@ -1152,6 +1165,9 @@ class HermesMobileApp:
             self.chat_view.set_busy(False)
             if reaction and self.pet_view is not None:
                 self.pet_view.flash_activity(reaction)
+            if self._message_queue:
+                next_msg = self._message_queue.pop(0)
+                asyncio.create_task(self.send_message(next_msg))
 
     async def interrupt_turn(self):
         """Interrupt the active local task or canonical remote session."""
@@ -1159,7 +1175,10 @@ class HermesMobileApp:
             try:
                 self.chat_view.set_status("Stopping…")
                 await self.remote_client.interrupt()
+                self.chat_view.set_busy(False)
+                self.chat_view.set_status("")
             except Exception as exc:
+                self.chat_view.set_busy(False)
                 snack(self.page, str(exc), error=True)
             return
         task = self._active_local_turn
