@@ -1169,6 +1169,58 @@ class HermesMobileApp:
                 next_msg = self._message_queue.pop(0)
                 asyncio.create_task(self.send_message(next_msg))
 
+    def _show_model_picker(self) -> None:
+        """Show a quick model switcher dialog in chat."""
+        c = mode_colors(self.dark_mode)
+        models = [
+            "openai/gpt-4o", "openai/gpt-4o-mini",
+            "anthropic/claude-3.5-sonnet", "anthropic/claude-3.5-haiku",
+            "google/gemini-2.5-pro", "google/gemini-2.5-flash",
+            "meta-llama/llama-4-maverick", "deepseek/deepseek-v3",
+        ]
+        current = self.remote_model if self.remote_mode else self.settings.default_model
+        items = []
+        for mdl in models:
+            check = ft.Icons.CHECK if mdl == current else ft.Icons.NONE
+            items.append(ft.PopupMenuItem(
+                icon=check,
+                text=mdl.split("/")[-1],
+                on_click=lambda e, m=mdl: asyncio.create_task(self._apply_model_switch(m)),
+            ))
+        # Use a simple popup instead of dialog
+        self.page.show_bottom_sheet(ft.BottomSheet(
+            content=ft.Column(
+                [
+                    ft.Text("Switch Model", size=16, weight=ft.FontWeight.W_600),
+                    ft.Divider(),
+                    *[ft.ListTile(
+                        leading=ft.Text(m.split("/")[0], size=10, color=c["muted_foreground"]),
+                        title=ft.Text(m.split("/")[-1], size=13),
+                        trailing=ft.Icon(ft.Icons.CHECK, size=16, color=c["success"]) if m == current else None,
+                        on_click=lambda e, m=m: asyncio.create_task(self._apply_model_switch(m)),
+                    ) for m in models],
+                ],
+                spacing=0, tight=True,
+                scroll=ft.ScrollMode.AUTO,
+            ),
+            open=True,
+        ))
+
+    async def _apply_model_switch(self, model: str) -> None:
+        self.settings.default_model = model
+        if self.remote_mode and self.remote_client:
+            self.remote_client.model = model
+        elif self.agent:
+            self.agent.model = model
+            if hasattr(self.agent, "_init_client"):
+                self.agent._init_client()
+        self.page.close_bottom_sheet()
+        snack(self.page, f"Model: {model}")
+        short = model.split("/")[-1] if "/" in model else model
+        if hasattr(self, "_app_bar_subtitle"):
+            self._app_bar_subtitle.value = f"{self.settings.default_provider} · {short}"
+        self.page.update()
+
     async def interrupt_turn(self):
         """Interrupt the active local task or canonical remote session."""
         if self.remote_mode and self.remote_client is not None:

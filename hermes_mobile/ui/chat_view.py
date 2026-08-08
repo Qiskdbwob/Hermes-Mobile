@@ -64,6 +64,14 @@ class ChatView:
             content_padding=ft.Padding.only(left=12, right=8, top=10, bottom=6),
         )
 
+        self.mic_button = ft.IconButton(
+            icon=ft.Icons.MIC,
+            icon_size=16,
+            icon_color=c["muted_foreground"],
+            tooltip="Voice input",
+            on_click=self._on_voice,
+            disabled=True,
+        )
         self.send_button = ft.IconButton(
             icon=ft.Icons.ARROW_UPWARD,
             on_click=self._on_send,
@@ -179,6 +187,7 @@ class ChatView:
                             context_menu,
                             model_pill,
                             ft.Container(expand=True),
+                            self.mic_button,
                             self.send_button,
                         ],
                         spacing=4,
@@ -500,6 +509,13 @@ class ChatView:
         )
         self.chat_list.controls.append(self._streaming_container)
         self._scroll_to_bottom()
+
+    def _copy_to_clipboard(self, text: str) -> None:
+        self.page.set_clipboard(text)
+        snack(self.page, "Copied")
+
+    def _on_voice(self, e) -> None:
+        snack(self.page, "Voice input coming soon")
 
     def _render_messages(self) -> None:
         """Re-render the chat list from self.messages (used by /undo, /retry)."""
