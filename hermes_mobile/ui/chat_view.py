@@ -636,9 +636,20 @@ class ChatView:
                 )
                 break
             try:
-                self.pending_attachments.append(
-                    attachment_from_picker_file(file, self._attachment_storage_dir())
-                )
+                attachment = attachment_from_picker_file(file, self._attachment_storage_dir())
+                if bool(getattr(self.app, "remote_mode", False)) and attachment.kind != "text":
+                    if attachment.local_path:
+                        try:
+                            Path(attachment.local_path).unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    snack(
+                        self.page,
+                        f"Remote attachments currently support text only: {attachment.name}",
+                        error=True,
+                    )
+                    continue
+                self.pending_attachments.append(attachment)
                 added += 1
             except Exception as exc:
                 name = getattr(file, "name", "attachment")

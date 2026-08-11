@@ -130,3 +130,26 @@ def test_chat_build_adds_file_picker_to_overlay(tmp_path: Path):
 
     assert root is not None
     assert view.file_picker in app.page.overlay
+
+
+class FakePicker:
+    def __init__(self, files):
+        self.files = files
+
+    async def pick_files(self, **kwargs):
+        return self.files
+
+
+async def test_remote_chat_rejects_binary_attachment_paths(tmp_path: Path):
+    app = fake_app(tmp_path)
+    app.remote_mode = True
+    view = ChatView(app)
+    view.file_picker = FakePicker([Picked("photo.png", b"\x89PNG\r\n\x1a\n" + b"0" * 64)])
+
+    await view._pick_attachments()
+
+    assert view.pending_attachments == []
+    snack_texts = [
+        getattr(getattr(item, "content", None), "value", "") for item in app.page.overlay
+    ]
+    assert any("Remote attachments currently support text only" in text for text in snack_texts)

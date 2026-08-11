@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from typing import Any, Mapping, cast
@@ -736,6 +737,63 @@ class HermesMobileApp:
         self._message_queue = self.composer_state_store.load_queue(key)
         return item
 
+    def _requeue_front_message(self, text: str) -> None:
+        """Put a failed queued message back at the front without losing order."""
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return
+        rest = list(self._message_queue)
+        if self.composer_state_store is not None:
+            persisted = self.composer_state_store.load_queue(self._composer_key())
+            if persisted:
+                rest = persisted
+        self._message_queue = [cleaned] + rest
+        if self.composer_state_store is not None:
+            self.composer_state_store.save_queue(self._composer_key(), self._message_queue)
+        snack(self.page, "Queued message kept for retry", error=True)
+
+    async def _show_remote_usage(self) -> None:
+        """Show backend-owned usage/context details when the Remote gateway supports them."""
+        client = self.remote_client
+        if client is None or client.state != "open":
+            snack(self.page, "Hermes Remote is not connected", error=True)
+            return
+        params = {"session_id": client.session_id} if client.session_id else {}
+        lines = ["**Remote usage**", ""]
+        found = False
+        try:
+            info = await client.request("session.info", params)
+            if isinstance(info, dict):
+                usage = info.get("usage")
+                if usage is not None:
+                    found = True
+                    lines.append("**session.info.usage**")
+                    lines.append("```json")
+                    lines.append(json.dumps(usage, ensure_ascii=False, indent=2)[:2000])
+                    lines.append("```")
+                model = info.get("model") or info.get("active_model")
+                if model:
+                    found = True
+                    lines.append(f"Model: `{model}`")
+        except Exception as exc:
+            lines.append(f"session.info unavailable: `{exc}`")
+
+        try:
+            breakdown = await client.request("session.context_breakdown", params)
+            if breakdown is not None:
+                found = True
+                lines.append("")
+                lines.append("**session.context_breakdown**")
+                lines.append("```json")
+                lines.append(json.dumps(breakdown, ensure_ascii=False, indent=2)[:3000])
+                lines.append("```")
+        except Exception as exc:
+            lines.append(f"context breakdown unavailable: `{exc}`")
+
+        if not found:
+            lines.append("Remote usage data is not advertised by this Hermes backend yet.")
+        self._append_system_chat_note("\n".join(lines))
+
     def _clear_message_queue(self) -> None:
         """Clear the persisted queue for the active runtime/session."""
         self._message_queue = []
@@ -944,7 +1002,7 @@ class HermesMobileApp:
             self.chat_view.set_status("")
             next_msg = self._pop_next_queued_message()
             if next_msg:
-                asyncio.create_task(self.send_message(next_msg))
+                asyncio.create_task(self.send_message(next_msg, from_queue=True))
         elif event.type == "tool.start":
             tool_id = str(payload.get("tool_id") or payload.get("id") or "remote-tool")
             arguments = payload.get("args") if isinstance(payload.get("args"), dict) else {}
@@ -1134,9 +1192,12 @@ class HermesMobileApp:
                 info += f"\nGateway: {self.remote_client.state}"
             snack(self.page, info)
         elif command == "usage":
-            msgs = len(self.chat_view.messages) if self.chat_view else 0
-            est = msgs * 200
-            snack(self.page, f"~{msgs} messages, est. ~{est} tokens")
+            if self.remote_mode and self.remote_client:
+                await self._show_remote_usage()
+            else:
+                msgs = len(self.chat_view.messages) if self.chat_view else 0
+                est = msgs * 200
+                snack(self.page, f"~{msgs} messages, est. ~{est} tokens")
         elif command == "queue":
             if arg.strip().lower() in {"clear", "reset"}:
                 self._clear_message_queue()
@@ -1203,7 +1264,7 @@ class HermesMobileApp:
         else:
             snack(self.page, f"Unknown command: /{command}. Type /help for available commands")
 
-    async def send_message(self, text: str):
+    async def send_message(self, text: str, *, from_queue: bool = False):
         """Send one turn through the selected local or remote runtime."""
         if not text.strip() or self.chat_view is None:
             return
@@ -1235,6 +1296,8 @@ class HermesMobileApp:
                 return
             except Exception as exc:
                 logger.exception("Remote conversation turn failed")
+                if from_queue:
+                    self._requeue_front_message(text)
                 self.chat_view.append_assistant_message(f"**Remote error:** {exc}")
                 self.chat_view.finalize_assistant_message()
                 self.chat_view.set_busy(False)
@@ -1248,6 +1311,7 @@ class HermesMobileApp:
             return
         self._active_local_turn = asyncio.current_task()
         reaction = ""
+        should_drain_queue = True
         try:
             async for chunk in self.agent.run_conversation(text, stream=True):
                 self.chat_view.append_assistant_message(chunk)
@@ -1256,8 +1320,14 @@ class HermesMobileApp:
         except asyncio.CancelledError:
             self.chat_view.finalize_assistant_message()
             self.chat_view.set_status("Stopped")
+            if from_queue:
+                self._requeue_front_message(text)
+                should_drain_queue = False
         except Exception as exc:
             logger.exception("Conversation turn failed")
+            if from_queue:
+                self._requeue_front_message(text)
+                should_drain_queue = False
             self.chat_view.append_assistant_message(f"**Error:** {exc}")
             self.chat_view.finalize_assistant_message()
             reaction = "failed"
@@ -1266,9 +1336,10 @@ class HermesMobileApp:
             self.chat_view.set_busy(False)
             if reaction and self.pet_view is not None:
                 self.pet_view.flash_activity(reaction)
-            next_msg = self._pop_next_queued_message()
-            if next_msg:
-                asyncio.create_task(self.send_message(next_msg))
+            if should_drain_queue:
+                next_msg = self._pop_next_queued_message()
+                if next_msg:
+                    asyncio.create_task(self.send_message(next_msg, from_queue=True))
 
     def _show_model_picker(self) -> None:
         """Show a quick model switcher dialog in chat."""
