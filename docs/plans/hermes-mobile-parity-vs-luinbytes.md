@@ -64,3 +64,30 @@
 - Android APK build on Mac only.
 - APK copied to `~/Downloads/Hermes-Mobile.apk` and uploaded to GitHub Release.
 - No backend Hermes source modifications unless explicitly authorized separately.
+
+## Execution log
+
+### 2026-08-11 — Phase 1 completed
+
+- Added `ComposerStateStore` with atomic `composer-state.json` persistence.
+- Drafts persist by runtime/backend/profile/session key.
+- Pending-message queue persists and drains FIFO after Local/Remote completion.
+- Busy composer semantics corrected: non-empty text queues; empty composer stops.
+- Added `/queue` and `/queue clear` for visible queue inspection/control.
+
+### 2026-08-11 — Phase 2 partial completed
+
+- Added safe lightweight chat attachments.
+- Text/code/markdown/json/csv-style files are inlined with strict size limits.
+- Images and binaries are copied to app-private storage and referenced by local path for agent tools such as `vision_analyze`.
+- Dangerous executable/package extensions are rejected.
+- The chat model pill now opens the quick model picker instead of navigating away.
+
+### Remaining hard boundaries
+
+These are intentionally not faked in Hermes Mobile Flet:
+
+- **Voice/STT/TTS:** requires Android recording/playback lifecycle and Hermes `/api/audio/*` contracts exposed in the selected backend. The current mic remains disabled rather than pretending voice works.
+- **MCP/Usage/Billing provider-account surfaces:** require capability-gated REST/RPC clients and server-owned contracts. Implement only after probing live backend support; do not invent values or local-only controls.
+- **Secure screen, biometrics, widget, share target:** require native Android integration or a Flet/native plugin layer. They are not ordinary Python/Flet UI work.
+- **APK size parity:** Flet/Python packaging will remain much larger than Kotlin/Compose. Reducing from ~226 MB requires payload audit and/or a native rewrite track.

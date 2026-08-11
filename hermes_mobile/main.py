@@ -736,6 +736,27 @@ class HermesMobileApp:
         self._message_queue = self.composer_state_store.load_queue(key)
         return item
 
+    def _clear_message_queue(self) -> None:
+        """Clear the persisted queue for the active runtime/session."""
+        self._message_queue = []
+        if self.composer_state_store is not None:
+            self.composer_state_store.save_queue(self._composer_key(), [])
+
+    def _queued_messages_snapshot(self) -> list[str]:
+        """Return the currently persisted queue for display."""
+        if self.composer_state_store is not None:
+            self._message_queue = self.composer_state_store.load_queue(self._composer_key())
+        return list(self._message_queue)
+
+    def _append_system_chat_note(self, text: str) -> None:
+        """Render a local assistant-style note into the transcript."""
+        from hermes_mobile.ui.chat_view import Message
+
+        msg = Message.assistant(text)
+        self.chat_view.messages.append(msg)
+        self.chat_view._add_message_bubble(msg)
+        self.page.update()
+
     async def show_remote_sessions(self):
         """Open the full-height, source-aware Remote session browser."""
         if not self.remote_mode:
@@ -1087,6 +1108,7 @@ class HermesMobileApp:
                 "`/retry` — resend last message",
                 "`/status` — agent & session info",
                 "`/usage` — token usage estimate",
+                "`/queue`, `/queue clear` — inspect or clear pending messages",
                 "`/version` — app version",
                 "`/tools` — tool count",
                 "`/skills` — skill count",
@@ -1115,6 +1137,22 @@ class HermesMobileApp:
             msgs = len(self.chat_view.messages) if self.chat_view else 0
             est = msgs * 200
             snack(self.page, f"~{msgs} messages, est. ~{est} tokens")
+        elif command == "queue":
+            if arg.strip().lower() in {"clear", "reset"}:
+                self._clear_message_queue()
+                snack(self.page, "Pending-message queue cleared")
+            else:
+                queue = self._queued_messages_snapshot()
+                if not queue:
+                    snack(self.page, "Pending-message queue is empty")
+                else:
+                    lines = ["**Pending-message queue**", ""]
+                    for index, item in enumerate(queue, 1):
+                        preview = item.replace("\n", " ")[:160]
+                        lines.append(f"{index}. {preview}")
+                    lines.append("")
+                    lines.append("Use `/queue clear` to remove all pending messages.")
+                    self._append_system_chat_note("\n".join(lines))
         elif command == "version":
             from hermes_mobile import __version__
 

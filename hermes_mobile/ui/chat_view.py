@@ -9,12 +9,20 @@ status rows instead of boxed cards.
 import asyncio
 import inspect
 import logging
+import tempfile
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import flet as ft
 
 from hermes_mobile.core.agent import Message, ToolCall
 from hermes_mobile.locales import t
+from hermes_mobile.ui.attachments import (
+    MAX_ATTACHMENTS_PER_TURN,
+    PendingAttachment,
+    attachment_from_picker_file,
+    attachments_to_prompt_context,
+)
 from hermes_mobile.ui.common import MONO_FONT, close_dialog, hermes_welcome_art, open_dialog, snack
 from hermes_mobile.ui.theme import mode_colors
 
@@ -88,6 +96,11 @@ class ChatView:
             color=ft.Colors.OUTLINE,
             visible=False,
         )
+        self.pending_attachments: List[PendingAttachment] = []
+        self.attachments_row = ft.Row([], spacing=6, wrap=True, visible=False)
+        self.file_picker = ft.FilePicker()
+        if hasattr(self.page, "overlay") and self.file_picker not in self.page.overlay:
+            self.page.overlay.append(self.file_picker)
 
     def build(self) -> ft.Control:
         """Build the flat desktop-derived transcript and docked composer."""
@@ -107,6 +120,11 @@ class ChatView:
             }.get(state, c["muted_foreground"])
             context_items = [
                 ft.PopupMenuItem(
+                    icon=ft.Icons.ATTACH_FILE,
+                    content="Attach file",
+                    on_click=lambda e: asyncio.create_task(self._pick_attachments()),
+                ),
+                ft.PopupMenuItem(
                     icon=ft.Icons.HISTORY,
                     content=t("sessions.title"),
                     on_click=lambda e: asyncio.create_task(self.app.show_remote_sessions()),
@@ -125,6 +143,11 @@ class ChatView:
             context_items = [
                 ft.PopupMenuItem(
                     icon=ft.Icons.ATTACH_FILE,
+                    content="Attach file",
+                    on_click=lambda e: asyncio.create_task(self._pick_attachments()),
+                ),
+                ft.PopupMenuItem(
+                    icon=ft.Icons.FOLDER_OPEN,
                     content="Artifacts",
                     on_click=lambda e: self.app._navigate_to("artifacts"),
                 ),
@@ -173,7 +196,11 @@ class ChatView:
             alignment=ft.Alignment.CENTER_LEFT,
             border=ft.Border.all(1, c["border"]),
             border_radius=ft.BorderRadius.all(12),
-            on_click=lambda e: self.app._navigate_to(model_destination),
+            on_click=lambda e: (
+                self.app._show_model_picker()
+                if hasattr(self.app, "_show_model_picker")
+                else self.app._navigate_to(model_destination)
+            ),
             ink=True,
             tooltip=t("chat.model_settings"),
         )
@@ -182,6 +209,7 @@ class ChatView:
             content=ft.Column(
                 [
                     self.input_field,
+                    self.attachments_row,
                     self.status_text,
                     ft.Row(
                         [
@@ -306,16 +334,18 @@ class ChatView:
         text = self.input_field.value
         if self._sending:
             if text and text.strip():
+                prompt = self._consume_pending_attachments(text.strip())
                 self.input_field.value = ""
                 self.page.update()
-                asyncio.create_task(self.app.send_message(text.strip()))
+                asyncio.create_task(self.app.send_message(prompt))
             else:
                 asyncio.create_task(self.app.interrupt_turn())
             return
         if text and text.strip():
+            prompt = self._consume_pending_attachments(text.strip())
             self.input_field.value = ""
             self.page.update()
-            asyncio.create_task(self.app.send_message(text.strip()))
+            asyncio.create_task(self.app.send_message(prompt))
 
     def set_busy(self, busy: bool):
         """Synchronize composer affordances with the active agent turn."""
@@ -528,6 +558,103 @@ class ChatView:
     def _copy_to_clipboard(self, text: str) -> None:
         self.page.set_clipboard(text)
         snack(self.page, "Copied")
+
+    def _attachment_storage_dir(self) -> Path:
+        settings = getattr(self.app, "settings", None)
+        if settings is not None and hasattr(settings, "get_data_dir"):
+            return Path(settings.get_data_dir())
+        return Path(tempfile.gettempdir()) / "hermes-mobile"
+
+    def _attachment_label(self, item: PendingAttachment) -> str:
+        suffix = "path" if item.local_path else "inline"
+        return f"{item.name} · {item.byte_count // 1024 or 1} KB · {suffix}"
+
+    def _refresh_attachments_row(self) -> None:
+        c = mode_colors(self.app.dark_mode)
+        self.attachments_row.controls.clear()
+        for item in self.pending_attachments:
+            self.attachments_row.controls.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Icon(
+                                ft.Icons.IMAGE_OUTLINED
+                                if item.kind == "image"
+                                else ft.Icons.DESCRIPTION_OUTLINED,
+                                size=13,
+                                color=c["muted_foreground"],
+                            ),
+                            ft.Text(
+                                self._attachment_label(item),
+                                size=11,
+                                color=c["muted_foreground"],
+                                max_lines=1,
+                                overflow=ft.TextOverflow.ELLIPSIS,
+                            ),
+                            ft.IconButton(
+                                icon=ft.Icons.CLOSE,
+                                icon_size=12,
+                                padding=ft.Padding.all(0),
+                                tooltip="Remove attachment",
+                                on_click=lambda e, aid=item.id: self._remove_attachment(aid),
+                            ),
+                        ],
+                        spacing=3,
+                        tight=True,
+                    ),
+                    padding=ft.Padding.only(left=8, right=2, top=3, bottom=3),
+                    border=ft.Border.all(1, c["border"]),
+                    border_radius=ft.BorderRadius.all(999),
+                )
+            )
+        self.attachments_row.visible = bool(self.pending_attachments)
+
+    def _remove_attachment(self, attachment_id: str) -> None:
+        self.pending_attachments = [a for a in self.pending_attachments if a.id != attachment_id]
+        self._refresh_attachments_row()
+        self.page.update()
+
+    async def _pick_attachments(self) -> None:
+        try:
+            selected = await self.file_picker.pick_files(
+                dialog_title="Attach files to this turn",
+                allow_multiple=True,
+                with_data=True,
+            )
+        except Exception as exc:
+            snack(self.page, f"Attachment picker failed: {exc}", error=True)
+            return
+        if not selected:
+            return
+        added = 0
+        for file in selected:
+            if len(self.pending_attachments) >= MAX_ATTACHMENTS_PER_TURN:
+                snack(
+                    self.page,
+                    f"Attachment limit is {MAX_ATTACHMENTS_PER_TURN} per turn",
+                    error=True,
+                )
+                break
+            try:
+                self.pending_attachments.append(
+                    attachment_from_picker_file(file, self._attachment_storage_dir())
+                )
+                added += 1
+            except Exception as exc:
+                name = getattr(file, "name", "attachment")
+                snack(self.page, f"Could not attach {name}: {exc}", error=True)
+        if added:
+            self._refresh_attachments_row()
+            snack(self.page, f"Attached {added} file{'s' if added != 1 else ''}")
+            self.page.update()
+
+    def _consume_pending_attachments(self, text: str) -> str:
+        if not self.pending_attachments:
+            return text
+        context = attachments_to_prompt_context(self.pending_attachments)
+        self.pending_attachments = []
+        self._refresh_attachments_row()
+        return f"{context}\n\nUser message:\n{text}"
 
     def _on_voice(self, e) -> None:
         snack(self.page, "Voice input coming soon")
