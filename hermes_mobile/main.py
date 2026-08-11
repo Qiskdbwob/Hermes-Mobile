@@ -1,5 +1,7 @@
 """Hermes Mobile - Main Flet Application"""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
@@ -24,6 +26,7 @@ from hermes_mobile.skills.manager import MobileSkillManager
 from hermes_mobile.ui.artifacts_view import ArtifactsView
 from hermes_mobile.ui.chat_view import ChatView
 from hermes_mobile.ui.common import brand_mark, snack, status_dot
+from hermes_mobile.ui.composer_state import ComposerStateStore
 from hermes_mobile.ui.cron_view import CronView
 from hermes_mobile.ui.gateway_view import GatewayView
 from hermes_mobile.ui.kanban_view import KanbanView
@@ -80,6 +83,7 @@ class HermesMobileApp:
         self._resumed_session_id: str | None = None
         self._resumed_stored_id: str | None = None
         self.remote_secret_store: RemoteSecretStore | None = None
+        self.composer_state_store: ComposerStateStore | None = None
         self._remote_connect_lock = asyncio.Lock()
         self._remote_tool_calls: dict[str, ToolCall] = {}
         self._active_local_turn: asyncio.Task | None = None
@@ -235,6 +239,7 @@ class HermesMobileApp:
             encrypt=self.settings.encrypt_memory,
         )
         self.remote_secret_store = RemoteSecretStore(self.settings.get_data_dir())
+        self.composer_state_store = ComposerStateStore(self.settings.get_config_dir())
 
         # Initialize skill manager
         self.skill_manager = MobileSkillManager(
@@ -678,6 +683,59 @@ class HermesMobileApp:
         self._new_session_button.visible = view in {"chat", "sessions"}
         self._sessions_button.visible = view != "sessions"
 
+    def _composer_key(self) -> str:
+        """Return the durable composer key for the selected runtime/session."""
+        if self.remote_mode:
+            client = self.remote_client
+            backend = getattr(self.settings, "remote_url", "") or "remote"
+            profile = getattr(self.settings, "remote_profile", "") or "default"
+            session = (
+                getattr(client, "stored_session_id", None)
+                or self._resumed_stored_id
+                or getattr(client, "session_id", None)
+                or self._resumed_session_id
+                or self.current_session_title
+                or "new"
+            )
+            return ComposerStateStore.key("remote", backend, profile, session)
+        return ComposerStateStore.key("local", self.current_session_title or "new")
+
+    def save_current_draft(self, text: str) -> None:
+        """Persist the current composer draft for this session/runtime."""
+        if self.composer_state_store is None:
+            return
+        self.composer_state_store.save_draft(self._composer_key(), text)
+
+    def _load_composer_state(self) -> None:
+        """Hydrate draft and queued turns for the current runtime/session."""
+        if self.composer_state_store is None or self.chat_view is None:
+            return
+        key = self._composer_key()
+        self._message_queue = self.composer_state_store.load_queue(key)
+        if not (self.chat_view.input_field.value or ""):
+            self.chat_view.input_field.value = self.composer_state_store.load_draft(key)
+
+    def _clear_current_draft(self) -> None:
+        if self.composer_state_store is not None:
+            self.composer_state_store.save_draft(self._composer_key(), "")
+
+    def _enqueue_message(self, text: str) -> None:
+        """Persistently queue a follow-up message for the active session."""
+        if self.composer_state_store is None:
+            self._message_queue.append(text)
+        else:
+            self._message_queue = self.composer_state_store.enqueue(self._composer_key(), text)
+        snack(self.page, f"Queued ({len(self._message_queue)} pending)")
+
+    def _pop_next_queued_message(self) -> str | None:
+        """Pop the next persisted queued message for FIFO draining."""
+        if self.composer_state_store is None:
+            return self._message_queue.pop(0) if self._message_queue else None
+        key = self._composer_key()
+        item = self.composer_state_store.pop_next(key)
+        self._message_queue = self.composer_state_store.load_queue(key)
+        return item
+
     async def show_remote_sessions(self):
         """Open the full-height, source-aware Remote session browser."""
         if not self.remote_mode:
@@ -706,6 +764,7 @@ class HermesMobileApp:
         self.activate_remote_session_result(result, title)
         self._resumed_stored_id = session_id
         self._resumed_session_id = client.session_id
+        self._load_composer_state()
 
     def activate_remote_session_result(self, result: Mapping[str, Any], title: str) -> None:
         """Render a session result that is already active in the remote runtime."""
@@ -862,8 +921,8 @@ class HermesMobileApp:
             if self.pet_view is not None:
                 self.pet_view.flash_activity("wave")
             self.chat_view.set_status("")
-            if self._message_queue:
-                next_msg = self._message_queue.pop(0)
+            next_msg = self._pop_next_queued_message()
+            if next_msg:
                 asyncio.create_task(self.send_message(next_msg))
         elif event.type == "tool.start":
             tool_id = str(payload.get("tool_id") or payload.get("id") or "remote-tool")
@@ -930,6 +989,8 @@ class HermesMobileApp:
             self.remote_client.stored_session_id = None
         self._resumed_session_id = None
         self._resumed_stored_id = None
+        self._message_queue = []
+        self._clear_current_draft()
         self._remote_tool_calls.clear()
         self.current_session_title = t("chat.new_session")
         self._navigate_to("chat")
@@ -1035,6 +1096,7 @@ class HermesMobileApp:
                 "`/help` — this list",
             ]
             from hermes_mobile.ui.chat_view import Message
+
             msg = Message.assistant("\n".join(lines))
             self.chat_view.messages.append(msg)
             self.chat_view._add_message_bubble(msg)
@@ -1055,6 +1117,7 @@ class HermesMobileApp:
             snack(self.page, f"~{msgs} messages, est. ~{est} tokens")
         elif command == "version":
             from hermes_mobile import __version__
+
             snack(self.page, f"Hermes Mobile v{__version__}")
         elif command == "tools":
             if self.agent:
@@ -1112,10 +1175,10 @@ class HermesMobileApp:
             return
 
         if self.chat_view._sending:
-            self._message_queue.append(text)
-            snack(self.page, f"Queued ({len(self._message_queue)} pending)")
+            self._enqueue_message(text)
             return
 
+        self._clear_current_draft()
         self.chat_view.set_busy(True)
         self.chat_view.add_user_message(text)
         self.page.update()
@@ -1165,46 +1228,64 @@ class HermesMobileApp:
             self.chat_view.set_busy(False)
             if reaction and self.pet_view is not None:
                 self.pet_view.flash_activity(reaction)
-            if self._message_queue:
-                next_msg = self._message_queue.pop(0)
+            next_msg = self._pop_next_queued_message()
+            if next_msg:
                 asyncio.create_task(self.send_message(next_msg))
 
     def _show_model_picker(self) -> None:
         """Show a quick model switcher dialog in chat."""
         c = mode_colors(self.dark_mode)
         models = [
-            "openai/gpt-4o", "openai/gpt-4o-mini",
-            "anthropic/claude-3.5-sonnet", "anthropic/claude-3.5-haiku",
-            "google/gemini-2.5-pro", "google/gemini-2.5-flash",
-            "meta-llama/llama-4-maverick", "deepseek/deepseek-v3",
+            "openai/gpt-4o",
+            "openai/gpt-4o-mini",
+            "anthropic/claude-3.5-sonnet",
+            "anthropic/claude-3.5-haiku",
+            "google/gemini-2.5-pro",
+            "google/gemini-2.5-flash",
+            "meta-llama/llama-4-maverick",
+            "deepseek/deepseek-v3",
         ]
         current = self.remote_model if self.remote_mode else self.settings.default_model
         items = []
         for mdl in models:
             check = ft.Icons.CHECK if mdl == current else ft.Icons.NONE
-            items.append(ft.PopupMenuItem(
-                icon=check,
-                text=mdl.split("/")[-1],
-                on_click=lambda e, m=mdl: asyncio.create_task(self._apply_model_switch(m)),
-            ))
+            items.append(
+                ft.PopupMenuItem(
+                    icon=check,
+                    text=mdl.split("/")[-1],
+                    on_click=lambda e, m=mdl: asyncio.create_task(self._apply_model_switch(m)),
+                )
+            )
         # Use a simple popup instead of dialog
-        self.page.show_bottom_sheet(ft.BottomSheet(
-            content=ft.Column(
-                [
-                    ft.Text("Switch Model", size=16, weight=ft.FontWeight.W_600),
-                    ft.Divider(),
-                    *[ft.ListTile(
-                        leading=ft.Text(m.split("/")[0], size=10, color=c["muted_foreground"]),
-                        title=ft.Text(m.split("/")[-1], size=13),
-                        trailing=ft.Icon(ft.Icons.CHECK, size=16, color=c["success"]) if m == current else None,
-                        on_click=lambda e, m=m: asyncio.create_task(self._apply_model_switch(m)),
-                    ) for m in models],
-                ],
-                spacing=0, tight=True,
-                scroll=ft.ScrollMode.AUTO,
-            ),
-            open=True,
-        ))
+        self.page.show_bottom_sheet(
+            ft.BottomSheet(
+                content=ft.Column(
+                    [
+                        ft.Text("Switch Model", size=16, weight=ft.FontWeight.W_600),
+                        ft.Divider(),
+                        *[
+                            ft.ListTile(
+                                leading=ft.Text(
+                                    m.split("/")[0], size=10, color=c["muted_foreground"]
+                                ),
+                                title=ft.Text(m.split("/")[-1], size=13),
+                                trailing=ft.Icon(ft.Icons.CHECK, size=16, color=c["success"])
+                                if m == current
+                                else None,
+                                on_click=lambda e, m=m: asyncio.create_task(
+                                    self._apply_model_switch(m)
+                                ),
+                            )
+                            for m in models
+                        ],
+                    ],
+                    spacing=0,
+                    tight=True,
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                open=True,
+            )
+        )
 
     async def _apply_model_switch(self, model: str) -> None:
         self.settings.default_model = model

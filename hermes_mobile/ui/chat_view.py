@@ -56,6 +56,7 @@ class ChatView:
             min_lines=1,
             max_lines=6,
             on_submit=self._on_send,
+            on_change=self._on_draft_change,
             border=ft.InputBorder.NONE,
             filled=False,
             text_size=14,
@@ -291,12 +292,26 @@ class ChatView:
     # Sending
     # ------------------------------------------------------------------
 
+    def _on_draft_change(self, e):
+        """Persist draft text for process-restart and session-switch recovery."""
+        if hasattr(self.app, "save_current_draft"):
+            self.app.save_current_draft(self.input_field.value or "")
+
     def _on_send(self, e):
-        """Submit one turn; concurrent sends are rejected visibly."""
-        if self._sending:
-            asyncio.create_task(self.app.interrupt_turn())
-            return
+        """Submit, queue, or stop depending on composer state.
+
+        Busy + non-empty text queues a follow-up turn. Busy + empty composer
+        keeps the Desktop-like Stop behavior.
+        """
         text = self.input_field.value
+        if self._sending:
+            if text and text.strip():
+                self.input_field.value = ""
+                self.page.update()
+                asyncio.create_task(self.app.send_message(text.strip()))
+            else:
+                asyncio.create_task(self.app.interrupt_turn())
+            return
         if text and text.strip():
             self.input_field.value = ""
             self.page.update()
