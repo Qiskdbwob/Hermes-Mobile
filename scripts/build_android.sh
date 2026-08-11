@@ -49,4 +49,21 @@ flet build apk --yes \
   --exclude tests \
   --exclude docs \
   --exclude scripts \
-  --exclude test_app.py
+  --exclude test_app.py \
+  --exclude AGENTS.md \
+  --exclude CLAUDE.md \
+  --exclude README.md \
+  --exclude CONTRIBUTING.md \
+  --exclude SECURITY.md \
+  --exclude .env \
+  --exclude .env.example \
+  --exclude .gitattributes \
+  --exclude .gitignore \
+  --exclude pyproject.toml \
+  --exclude setup.py \
+  --exclude buildozer.spec
+
+APK_PATH="$ROOT_DIR/build/apk/hermes-mobile.apk"
+if [[ -f "$APK_PATH" ]]; then
+  "$PYTHON_BIN" scripts/audit_apk_payload.py "$APK_PATH"
+fi
