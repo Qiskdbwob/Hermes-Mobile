@@ -1,0 +1,189 @@
+# CI-CD — test, build release APK, auto-increment version.
+#
+# Pipeline:
+#   1. test        — lint (ruff) + full pytest suite (Python 3.9 & 3.12).
+#   2. build-apk   — build a release APK via the official Flet GitHub Action,
+#                    run the project's APK payload audit, upload the APK as a
+#                    workflow artifact, and (on demand) publish a GitHub Release.
+#
+# Versioning (automatic, no manual bumps):
+#   - versionCode (Android internal build id): GitHub run number of this
+#     workflow, which strictly increases on every run.
+#   - versionName (user-facing): "<base version from pyproject>.<run number>",
+#     e.g. 0.1.0.42. On a tag push (v*), the tag itself is the version.
+#
+# PRs only run `test` (the existing ci.yml covers fast PR checks); APK builds
+# run on pushes to main, tag pushes, and manual dispatch.
+name: CI-CD
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish a GitHub Release with the APK"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # create GitHub Releases on dispatch/tag runs; read-only otherwise
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLET_CLI_SKIP_FLUTTER_DOCTOR: "true"
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint with ruff
+        run: ruff check .
+
+      - name: Check formatting with ruff
+        run: ruff format --check .
+
+      - name: Test with pytest
+        run: python -m pytest tests/ -q --tb=short
+
+  build-apk:
+    name: Build release APK
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute version
+        id: version
+        shell: bash
+        run: |
+          BASE_VERSION="$(grep -m1 '^version = ' pyproject.toml | sed -E 's/^version = \"([^\"]+)\".*/\1/')"
+          RUN_NUMBER="${{ github.run_number }}"
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            # Tag push: the tag IS the version (e.g. v0.1.0.42 -> 0.1.0.42).
+            APP_VERSION="${GITHUB_REF_NAME#v}"
+            SUFFIX="${APP_VERSION##*.}"
+            if [[ "$SUFFIX" =~ ^[0-9]+$ ]]; then
+              BUILD_NUMBER="$SUFFIX"
+            else
+              BUILD_NUMBER="$RUN_NUMBER"
+            fi
+          else
+            # Every run of this workflow increments the visible version.
+            APP_VERSION="${BASE_VERSION}.${RUN_NUMBER}"
+            BUILD_NUMBER="$RUN_NUMBER"
+          fi
+          echo "app_version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${APP_VERSION} (versionCode ${BUILD_NUMBER})"
+
+      - name: Build APK
+        id: build
+        uses: flet-dev/flet-build-action@v1
+        with:
+          target: apk
+          runner-python-version: "3.12"
+          # bundled-python-version left empty: Flet resolves the Python
+          # bundled into the APK from project.requires-python.
+          build-number: ${{ steps.version.outputs.build_number }}
+          build-version: ${{ steps.version.outputs.app_version }}
+          extra-args: >-
+            --yes
+            --exclude .venv
+            --exclude .flet
+            --exclude .pytest_cache
+            --exclude .ruff_cache
+            --exclude .mypy_cache
+            --exclude .coverage
+            --exclude htmlcov
+            --exclude __pycache__
+            --exclude '**/__pycache__/**'
+            --exclude '*.py[co]'
+            --exclude '**/*.py[co]'
+            --exclude .buildozer
+            --exclude .git
+            --exclude .github
+            --exclude build
+            --exclude tests
+            --exclude docs
+            --exclude scripts
+            --exclude test_app.py
+            --exclude AGENTS.md
+            --exclude CLAUDE.md
+            --exclude README.md
+            --exclude CONTRIBUTING.md
+            --exclude SECURITY.md
+            --exclude .env
+            --exclude .env.example
+            --exclude .gitattributes
+            --exclude .gitignore
+            --exclude pyproject.toml
+            --exclude setup.py
+            --exclude buildozer.spec
+            --cleanup-packages
+            --cleanup-package-files pip
+            --cleanup-package-files 'pip-*'
+            --cleanup-package-files setuptools
+            --cleanup-package-files 'setuptools-*'
+            --cleanup-package-files wheel
+            --cleanup-package-files 'wheel-*'
+            --cleanup-package-files '*/tests'
+            --cleanup-package-files '*/tests/*'
+            --cleanup-package-files '*/_tests'
+            --cleanup-package-files '*/_tests/*'
+
+      - name: Audit APK payload
+        id: audit
+        shell: bash
+        run: |
+          OUTPUT="${{ steps.build.outputs.output-path }}"
+          APK="$(find "$OUTPUT" -maxdepth 1 -name '*.apk' -type f | head -n1)"
+          if [[ -z "$APK" ]]; then
+            echo "::error::No APK produced in $OUTPUT"
+            exit 1
+          fi
+          echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
+          python3 scripts/audit_apk_payload.py "$APK" --json
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hermes-mobile-${{ steps.version.outputs.app_version }}.apk
+          path: ${{ steps.audit.outputs.apk_path }}
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: (github.event_name == 'workflow_dispatch' && inputs.publish_release) || startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.app_version }}"
+          TAG="v${VERSION}"
+          gh release create "$TAG" "${{ steps.audit.outputs.apk_path }}" \
+            --title "Hermes Mobile ${TAG}" \
+            --generate-notes
