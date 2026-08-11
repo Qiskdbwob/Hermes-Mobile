@@ -87,7 +87,12 @@
 
 These are intentionally not faked in Hermes Mobile Flet:
 
-- **Voice/STT/TTS:** requires Android recording/playback lifecycle and Hermes `/api/audio/*` contracts exposed in the selected backend. The current mic remains disabled rather than pretending voice works.
+- **Voice/STT/TTS:** full press-to-talk and read-aloud still require Android recording/playback lifecycle and Hermes `/api/audio/*` contracts exposed in the selected backend. The current mic supports Local audio-file transcription only; Remote voice is capability-gated instead of faked.
 - **MCP/Usage/Billing provider-account surfaces:** require capability-gated REST/RPC clients and server-owned contracts. Implement only after probing live backend support; do not invent values or local-only controls.
 - **Secure screen, biometrics, widget, share target:** require native Android integration or a Flet/native plugin layer. They are not ordinary Python/Flet UI work.
 - **APK size parity:** Flet/Python packaging will remain much larger than Kotlin/Compose. Reducing from ~226 MB requires payload audit and/or a native rewrite track.
+
+### 2026-08-11 final release-hardening follow-up
+
+- Voice placeholder was replaced with an honest Local audio-file transcription flow. Flet Python exposes FilePicker but no native recorder control in the installed API, so press-to-talk remains a native bridge/backend task. Remote mode explicitly gates voice on `/api/audio/transcribe` instead of pretending Android-local audio is readable by the VPS.
+- APK payload cleanup is now stricter: dependency payload warnings (`pip/`, dependency tests, etc.) are blockers, and `scripts/build_android.sh` uses Flet `--cleanup-packages` before signing. Latest measured build: `223432913` bytes, `app_zip.forbidden=[]`, `sitepackages_zip.warnings={}`.

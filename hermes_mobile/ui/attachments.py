@@ -84,6 +84,8 @@ def _guess_mime(name: str, explicit: str = "") -> str:
 
 def _is_text(name: str, mime_type: str, data: bytes) -> bool:
     suffix = Path(name).suffix.lower()
+    if mime_type.startswith(("audio/", "image/", "video/")):
+        return False
     if mime_type.startswith("text/") or suffix in _TEXT_EXTENSIONS:
         return True
     sample = data[:4096]

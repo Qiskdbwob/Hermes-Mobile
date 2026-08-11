@@ -153,3 +153,46 @@ async def test_remote_chat_rejects_binary_attachment_paths(tmp_path: Path):
         getattr(getattr(item, "content", None), "value", "") for item in app.page.overlay
     ]
     assert any("Remote attachments currently support text only" in text for text in snack_texts)
+
+
+class AudioAgent:
+    def __init__(self):
+        self.paths = []
+
+    async def transcribe_audio_file(self, path: Path) -> str:
+        self.paths.append(path)
+        return "hello from audio"
+
+
+async def test_voice_button_transcribes_audio_file_into_composer(tmp_path: Path):
+    app = fake_app(tmp_path)
+    app.agent = AudioAgent()
+    view = ChatView(app)
+    view.file_picker = FakePicker([Picked("voice.mp3", b"ID3" + b"0" * 64)])
+
+    await view._pick_voice_audio()
+
+    assert view.input_field.value == "hello from audio"
+    assert len(app.agent.paths) == 1
+    assert app.agent.paths[0].exists()
+    assert any(
+        getattr(getattr(item, "content", None), "value", "") == "Audio transcribed into composer"
+        for item in app.page.overlay
+    )
+
+
+async def test_voice_button_is_honest_in_remote_mode(tmp_path: Path):
+    app = fake_app(tmp_path)
+    app.remote_mode = True
+    app.agent = AudioAgent()
+    view = ChatView(app)
+    view.file_picker = FakePicker([Picked("voice.mp3", b"ID3" + b"0" * 64)])
+
+    await view._pick_voice_audio()
+
+    assert app.agent.paths == []
+    assert any(
+        "Remote voice needs backend /api/audio/transcribe"
+        in getattr(getattr(item, "content", None), "value", "")
+        for item in app.page.overlay
+    )

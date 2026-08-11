@@ -61,7 +61,18 @@ flet build apk --yes \
   --exclude .gitignore \
   --exclude pyproject.toml \
   --exclude setup.py \
-  --exclude buildozer.spec
+  --exclude buildozer.spec \
+  --cleanup-packages \
+  --cleanup-package-files pip \
+  --cleanup-package-files 'pip-*' \
+  --cleanup-package-files setuptools \
+  --cleanup-package-files 'setuptools-*' \
+  --cleanup-package-files wheel \
+  --cleanup-package-files 'wheel-*' \
+  --cleanup-package-files '*/tests' \
+  --cleanup-package-files '*/tests/*' \
+  --cleanup-package-files '*/_tests' \
+  --cleanup-package-files '*/_tests/*'
 
 APK_PATH="$ROOT_DIR/build/apk/hermes-mobile.apk"
 if [[ -f "$APK_PATH" ]]; then

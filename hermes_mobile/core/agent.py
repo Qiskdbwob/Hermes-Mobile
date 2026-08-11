@@ -223,6 +223,37 @@ class MobileAgent:
             raise RuntimeError(self._client_error or "AI provider not configured.")
         return self._client
 
+    async def transcribe_audio_file(self, path: Path) -> str:
+        """Transcribe a local audio file with the active OpenAI-compatible provider.
+
+        Hermes Mobile/Flet does not expose native microphone recording here; the
+        chat mic uses this for selected audio files only. Providers without an
+        audio transcription endpoint surface a friendly runtime error.
+        """
+        source = Path(path).expanduser()
+        if not source.is_file():
+            raise RuntimeError(f"Audio file not found: {source}")
+        client = self._require_client()
+        audio = getattr(client, "audio", None)
+        transcriptions = getattr(audio, "transcriptions", None)
+        create = getattr(transcriptions, "create", None)
+        if create is None:
+            raise RuntimeError(
+                "The active provider does not expose OpenAI-compatible audio transcription."
+            )
+        try:
+            with source.open("rb") as file_obj:
+                result = await create(model="whisper-1", file=file_obj)
+        except Exception as exc:
+            raise RuntimeError(f"Audio transcription failed: {exc}") from exc
+        text = getattr(result, "text", None)
+        if text is None and isinstance(result, dict):
+            text = result.get("text")
+        text = str(text or "").strip()
+        if not text:
+            raise RuntimeError("Audio transcription returned no text.")
+        return text
+
     def _get_provider_profile(self) -> Optional[ProviderProfile]:
         """Resolve the configured provider, including registry aliases."""
         return get_provider_profile(self.provider)

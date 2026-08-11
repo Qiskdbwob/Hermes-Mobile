@@ -68,7 +68,7 @@ def test_apk_payload_audit_rejects_project_payload(tmp_path: Path):
     assert "hermes_mobile/__pycache__/main.cpython-312.pyc" in summary["app_zip"]["forbidden"]
 
 
-def test_apk_payload_audit_warns_for_dependency_test_payload(tmp_path: Path):
+def test_apk_payload_audit_rejects_dependency_test_payload(tmp_path: Path):
     apk = tmp_path / "deps.apk"
     _write_apk(
         apk,
@@ -78,6 +78,6 @@ def test_apk_payload_audit_warns_for_dependency_test_payload(tmp_path: Path):
 
     summary = audit(apk)
 
-    assert summary["passed"] is True
+    assert summary["passed"] is False
     assert summary["sitepackages_zip"]["warnings"]["pip/"]["count"] == 1
     assert summary["sitepackages_zip"]["warnings"]["croniter/tests/"]["count"] == 1

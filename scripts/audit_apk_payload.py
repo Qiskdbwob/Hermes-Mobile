@@ -6,8 +6,8 @@ The APK embeds two nested archives produced by Flet/serious_python:
 - assets/sitepackages.zip: Python dependencies
 
 This script is intentionally conservative: app.zip development/repository files are
-release blockers; third-party dependency test/pip payload is reported separately
-because removing it may require changing the Flet/serious_python packaging step.
+release blockers; third-party dependency test/pip payload is also a release
+blocker now that the Flet build supports --cleanup-packages.
 """
 
 from __future__ import annotations
@@ -136,7 +136,7 @@ def audit(apk_path: Path) -> dict[str, object]:
         "outer_top_level_bytes": outer_top,
         "app_zip": app.__dict__,
         "sitepackages_zip": sitepackages.__dict__,
-        "passed": not app.forbidden,
+        "passed": not app.forbidden and not sitepackages.warnings,
     }
 
 

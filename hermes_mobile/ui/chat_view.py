@@ -77,9 +77,8 @@ class ChatView:
             icon=ft.Icons.MIC,
             icon_size=16,
             icon_color=c["muted_foreground"],
-            tooltip="Voice input",
+            tooltip="Transcribe audio file",
             on_click=self._on_voice,
-            disabled=True,
         )
         self.send_button = ft.IconButton(
             icon=ft.Icons.ARROW_UPWARD,
@@ -668,7 +667,59 @@ class ChatView:
         return f"{context}\n\nUser message:\n{text}"
 
     def _on_voice(self, e) -> None:
-        snack(self.page, "Voice input coming soon")
+        asyncio.create_task(self._pick_voice_audio())
+
+    async def _pick_voice_audio(self) -> None:
+        """Pick an audio file and transcribe it into the composer.
+
+        This is intentionally not a fake microphone. Current Flet Python APIs expose
+        FilePicker but not a native recorder control, so press-to-talk remains a
+        native/bridge task.
+        """
+        if bool(getattr(self.app, "remote_mode", False)):
+            snack(
+                self.page,
+                "Remote voice needs backend /api/audio/transcribe support; use text or attach a transcript for now.",
+                error=True,
+            )
+            return
+        agent = getattr(self.app, "agent", None)
+        if agent is None or not hasattr(agent, "transcribe_audio_file"):
+            snack(self.page, "Local audio transcription is not available", error=True)
+            return
+        try:
+            selected = await self.file_picker.pick_files(
+                dialog_title="Choose an audio file to transcribe",
+                file_type=ft.FilePickerFileType.ANY,
+                allowed_extensions=["wav", "mp3", "m4a", "aac", "ogg", "oga", "webm", "flac"],
+                allow_multiple=False,
+                with_data=True,
+            )
+        except Exception as exc:
+            snack(self.page, f"Audio picker failed: {exc}", error=True)
+            return
+        if not selected:
+            return
+        try:
+            attachment = attachment_from_picker_file(selected[0], self._attachment_storage_dir())
+            suffix = Path(attachment.name).suffix.lower().lstrip(".")
+            if not (
+                attachment.mime_type.startswith("audio/")
+                or suffix in {"wav", "mp3", "m4a", "aac", "ogg", "oga", "webm", "flac"}
+            ):
+                raise ValueError(f"Not an audio file: {attachment.name}")
+            if not attachment.local_path:
+                raise ValueError(f"Audio file could not be staged: {attachment.name}")
+            snack(self.page, "Transcribing audio…")
+            transcript = await agent.transcribe_audio_file(Path(attachment.local_path))
+        except Exception as exc:
+            snack(self.page, f"Audio transcription failed: {exc}", error=True)
+            return
+        existing = str(self.input_field.value or "").strip()
+        self.input_field.value = f"{existing}\n{transcript}".strip() if existing else transcript
+        self._on_draft_change(None)
+        snack(self.page, "Audio transcribed into composer")
+        self.page.update()
 
     def _render_messages(self) -> None:
         """Re-render the chat list from self.messages (used by /undo, /retry)."""
