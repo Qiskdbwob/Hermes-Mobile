@@ -47,6 +47,18 @@ dev = [
     "mypy>=1.10.0",
     "black>=24.3.0",
 ]
+
+[dependency-groups]
+# PEP 735 dev group, installed by `uv run`/`uv sync` (used by the CI
+# flet-build-action). Keeps `flet-cli` present in the build venv so that
+# `flet --version --json` emits clean JSON: without it, the flet entry point
+# bootstraps flet-cli on demand and prints an "Installing flet-cli ..." banner
+# to stdout, which breaks the action's JSON parsing.
+# Not bundled into the APK: `flet build` only packages `[project].dependencies`.
+dev = [
+    "flet-cli>=0.24.0",
+]
+
 [tool.flet]
 product = "Hermes Mobile"
 bundle_id = "com.hermes.mobile"
