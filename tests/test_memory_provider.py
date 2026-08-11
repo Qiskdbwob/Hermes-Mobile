@@ -228,6 +228,70 @@ class TestMobileMemoryProvider:
         conn = memory_provider._get_conn()
         assert conn is not None
 
+
+class TestEncryptedToolCalls:
+    async def test_encrypted_conversation_encrypts_tool_calls(self, temp_dir):
+        # Regression: tool_calls JSON (which carries tool results: file
+        # contents, shell output, web pages) was stored in plaintext even
+        # with encrypt=True.
+        from hermes_mobile.memory.provider import MobileMemoryProvider
+
+        db_path = temp_dir / "conv_enc_tools.db"
+        mp = MobileMemoryProvider(db_path=db_path, encrypt=True, encryption_key="test-key")
+        tc = ToolCall(name="web_search", arguments={"query": "SECRET_TOKEN_XYZ"}, call_id="c1")
+        messages = [
+            Message.user("search"),
+            Message.assistant("Searching...", tool_calls=[tc]),
+            Message.tool(content="SECRET_OUTPUT_123", tool_call_id="c1", name="web_search"),
+        ]
+        await mp.save_conversation("enc-tools", messages)
+
+        conn = mp._get_conn()
+        rows = conn.execute(
+            "SELECT content, tool_calls FROM conversations WHERE session_id = ? ORDER BY rowid",
+            ("enc-tools",),
+        ).fetchall()
+        assert len(rows) == 3
+        assistant_row, tool_row = rows[1], rows[2]
+        assert "SECRET_TOKEN_XYZ" not in assistant_row[1]  # tool-call JSON no longer plaintext
+        assert "SECRET_OUTPUT_123" not in tool_row[0]  # content stays encrypted
+
+        convos = await mp.get_conversation("enc-tools")
+        assert convos[1]["tool_calls"][0]["arguments"] == {"query": "SECRET_TOKEN_XYZ"}
+        assert convos[2]["content"] == "SECRET_OUTPUT_123"
+        mp.close()
+
+    async def test_encrypted_reader_tolerates_legacy_plaintext_tool_calls(self, temp_dir):
+        # Pre-fix rows stored tool_calls in plaintext; reading them back must
+        # still work (decrypt falls back to the raw value).
+        import json as _json
+
+        from hermes_mobile.memory.provider import MobileMemoryProvider
+
+        db_path = temp_dir / "conv_legacy_tools.db"
+        mp = MobileMemoryProvider(db_path=db_path, encrypt=True, encryption_key="test-key")
+        tc = ToolCall(name="web_search", arguments={"query": "legacy"}, call_id="c1")
+        conn = mp._get_conn()
+        conn.execute(
+            "INSERT INTO conversations (id, session_id, role, content, tool_calls, tool_call_id, name, timestamp, message_id) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                "id1",
+                "legacy-tools",
+                "assistant",
+                "",
+                _json.dumps([tc.to_dict()]),
+                None,
+                None,
+                "2024-01-01T00:00:00",
+                "mid1",
+            ),
+        )
+        conn.commit()
+
+        convos = await mp.get_conversation("legacy-tools")
+        assert convos[0]["tool_calls"][0]["arguments"] == {"query": "legacy"}
+        mp.close()
+
     async def test_set_skill_memory_with_encryption(self, temp_dir):
         db_path = temp_dir / "skill_enc.db"
         mp = MobileMemoryProvider(db_path=db_path, encrypt=True, encryption_key="test-key")

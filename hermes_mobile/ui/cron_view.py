@@ -1,5 +1,7 @@
 """Cron View - Cron job management interface"""
 
+import asyncio
+
 import flet as ft
 
 from hermes_mobile.cron.scheduler import (
@@ -188,7 +190,7 @@ class CronView:
         schedule_field = ft.TextField(label="Cron Schedule", hint_text="0 3 * * * (daily at 3 AM)")
         command_field = ft.TextField(
             label="Command",
-            hint_text="python -m hermes_mobile.cron.backup_data",
+            hint_text="python3 -m hermes_mobile.cron.backup_data",
             multiline=True,
             min_lines=2,
         )
@@ -295,16 +297,21 @@ class CronView:
         open_dialog(self.page, dialog)
 
     def _run_job_now(self, job):
-        """Run a job immediately"""
+        """Run a job immediately (off the UI thread, back on the event loop)."""
+        asyncio.create_task(self._run_job_now_async(job))
 
-        def run_async():
-            output = run_job_now(job.id)
+    async def _run_job_now_async(self, job):
+        """Execute the job in a worker thread, then update the UI on the loop.
+
+        Previously the worker thread called snack()/_refresh() directly, which
+        mutates Flet controls from a non-UI thread (not thread-safe).
+        """
+        try:
+            output = await asyncio.to_thread(run_job_now, job.id)
             snack(self.page, f"Job completed: {output.status} ({output.duration:.1f}s)")
-            self._refresh()
-
-        import threading
-
-        threading.Thread(target=run_async, daemon=True).start()
+        except Exception as exc:
+            snack(self.page, f"Job failed: {exc}", error=True)
+        self._refresh()
 
     def _toggle_job(self, job):
         """Enable/disable a job"""

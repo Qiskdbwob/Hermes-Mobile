@@ -18,6 +18,7 @@ _DEFAULT_LOCALE = "en"
 _AVAILABLE_LOCALES = ("en", "pt-br")
 _translations: dict = {}
 _current_locale: str = _DEFAULT_LOCALE
+_en_fallback: Optional[dict] = None
 
 
 def _load_locale(locale: str) -> dict:
@@ -47,7 +48,7 @@ def init(locale: Optional[str] = None) -> None:
 
 
 def set_locale(locale: str) -> bool:
-    global _current_locale, _translations
+    global _current_locale, _translations, _en_fallback
 
     if locale not in _AVAILABLE_LOCALES:
         logger.warning("Unsupported locale: %s", locale)
@@ -55,6 +56,9 @@ def set_locale(locale: str) -> bool:
 
     _current_locale = locale
     _translations = _load_locale(locale)
+    # The English fallback is locale-independent; keep the cached copy.
+    if locale == _DEFAULT_LOCALE:
+        _en_fallback = None
     return True
 
 
@@ -68,7 +72,15 @@ def available_locales() -> tuple[str, ...]:
 
 def t(key: str, **kwargs) -> str:
     """Translate a dotted key path. Falls back to key if missing."""
-    fallback = _load_locale("en") if _current_locale != "en" else {}
+    global _en_fallback
+    if _current_locale != "en":
+        # Load the English fallback once instead of parsing en.json on every
+        # lookup (UI rebuilds issue dozens of t() calls).
+        if _en_fallback is None:
+            _en_fallback = _load_locale("en")
+        fallback = _en_fallback
+    else:
+        fallback = {}
 
     parts = key.split(".")
     value = _translations

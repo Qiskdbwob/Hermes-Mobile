@@ -44,6 +44,32 @@ SAFE_FUNCTIONS = {
     "e": math.e,
 }
 
+# DoS guards: cap expression length, exponents, and result sizes so an
+# adversarial prompt cannot hang the app or exhaust memory (e.g. 9**9**9).
+MAX_EXPRESSION_LENGTH = 500
+MAX_EXPONENT = 10_000
+MAX_RESULT_DIGITS = 50_000
+MAX_RESULT_CHARS = 100_000
+
+
+def _guard_pow(base, exponent) -> None:
+    """Reject power operations that would exhaust memory or CPU."""
+    if isinstance(exponent, int) and abs(exponent) > MAX_EXPONENT:
+        raise ValueError(f"Exponent too large: {exponent}")
+    if isinstance(base, int) and isinstance(exponent, int) and exponent > 0:
+        base_digits = len(str(abs(base))) if base else 1
+        if base_digits * exponent > MAX_RESULT_DIGITS:
+            raise ValueError("Result too large")
+
+
+def _bounded(value):
+    """Reject results that could exhaust memory (int digit / string size caps)."""
+    if isinstance(value, int) and len(str(abs(value))) > MAX_RESULT_DIGITS:
+        raise ValueError("Result too large")
+    if isinstance(value, str) and len(value) > MAX_RESULT_CHARS:
+        raise ValueError("String result too large")
+    return value
+
 
 class ExpressionVisitor(ast.NodeVisitor):
     """Validate that an AST only contains safe operations."""
@@ -61,6 +87,18 @@ class ExpressionVisitor(ast.NodeVisitor):
         self.valid = False
 
     def visit_Subscript(self, node):
+        self.valid = False
+
+    def visit_List(self, node):
+        self.valid = False
+
+    def visit_Tuple(self, node):
+        self.valid = False
+
+    def visit_Dict(self, node):
+        self.valid = False
+
+    def visit_Set(self, node):
         self.valid = False
 
     def visit_Lambda(self, node):
@@ -117,7 +155,10 @@ class ExpressionEvaluator(ast.NodeVisitor):
             raise ValueError(f"Unsafe operator: {op_type.__name__}")
         right = self.pop()
         left = self.pop()
-        self.push(SAFE_OPERATORS[op_type](left, right))
+        if op_type is ast.Pow:
+            _guard_pow(left, right)
+        result = SAFE_OPERATORS[op_type](left, right)
+        self.push(_bounded(result))
 
     def visit_UnaryOp(self, node):
         self.visit(node.operand)
@@ -125,7 +166,7 @@ class ExpressionEvaluator(ast.NodeVisitor):
         if op_type not in SAFE_OPERATORS:
             raise ValueError(f"Unsafe operator: {op_type.__name__}")
         operand = self.pop()
-        self.push(SAFE_OPERATORS[op_type](operand))
+        self.push(_bounded(SAFE_OPERATORS[op_type](operand)))
 
     def visit_Call(self, node):
         if not isinstance(node.func, ast.Name) or node.func.id not in SAFE_FUNCTIONS:
@@ -137,7 +178,7 @@ class ExpressionEvaluator(ast.NodeVisitor):
             self.visit(arg)
             args.append(self.pop())
         func = SAFE_FUNCTIONS[node.func.id]
-        self.push(func(*args))
+        self.push(_bounded(func(*args)))
 
     def visit_Expr(self, node):
         self.visit(node.value)
@@ -156,28 +197,32 @@ class ExpressionEvaluator(ast.NodeVisitor):
         self.push(result)
 
     def visit_Compare(self, node):
+        # Proper chained-comparison semantics: a < b < c evaluates as
+        # (a < b) and (b < c). The previous implementation reused the last
+        # two operands for every operator (5 < 2 < 3 wrongly returned True).
         self.visit(node.left)
-        for comparator in node.comparators:
-            self.visit(comparator)
-        right = self.pop()
         left = self.pop()
-        for op in node.ops:
+        result = True
+        for op, comparator in zip(node.ops, node.comparators):
+            self.visit(comparator)
+            right = self.pop()
             if isinstance(op, ast.Eq):
-                result = left == right
+                cmp = left == right
             elif isinstance(op, ast.NotEq):
-                result = left != right
+                cmp = left != right
             elif isinstance(op, ast.Lt):
-                result = left < right
+                cmp = left < right
             elif isinstance(op, ast.LtE):
-                result = left <= right
+                cmp = left <= right
             elif isinstance(op, ast.Gt):
-                result = left > right
+                cmp = left > right
             elif isinstance(op, ast.GtE):
-                result = left >= right
+                cmp = left >= right
             else:
                 raise ValueError(f"Unknown comparison: {type(op).__name__}")
-            left = result
-        self.push(left)
+            result = result and cmp
+            left = right
+        self.push(result)
 
 
 def is_safe_expression(expression: str) -> bool:
@@ -197,8 +242,11 @@ def safe_calculate(expression: str) -> float | int | str:
     Only allows basic arithmetic, math functions, and constants.
     No attribute access, imports, lambdas, comprehensions, or assignments.
     """
+    expression = expression.strip()
+    if len(expression) > MAX_EXPRESSION_LENGTH:
+        return "Error: Expression too long"
     try:
-        tree = ast.parse(expression.strip(), mode="eval")
+        tree = ast.parse(expression, mode="eval")
     except SyntaxError as e:
         return f"Syntax error: {e}"
 

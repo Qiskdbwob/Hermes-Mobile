@@ -192,11 +192,7 @@
     "pet_update_error": "Could not update pet."
   },
   "gateway": {
-    "title": "Gateway",
-    "status": "Status",
-    "enabled": "Enabled",
-    "running": "Running",
-    "stopped": "Stopped",
+    "title": "Gateway","status": "Status", "offline": "Offline", "enabled": "Enabled", "running": "Running", "stopped": "Stopped",
     "port": "Port",
     "platforms": "Platforms",
     "pairing": "Pairing",

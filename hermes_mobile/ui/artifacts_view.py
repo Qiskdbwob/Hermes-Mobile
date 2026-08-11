@@ -976,8 +976,13 @@ class ArtifactsView:
                 preview = ft.Text(f"Could not read image: {exc}", color=c["destructive"])
         else:
             try:
-                text = path.read_text(errors="replace")[:_MAX_PREVIEW]
-                if len(text) >= _MAX_PREVIEW:
+                # Read at most _MAX_PREVIEW bytes; reading the whole file first
+                # made previewing a large video/audio/binary file load it all
+                # into memory (OOM risk on Android) before truncating.
+                with open(path, "rb") as handle:
+                    raw = handle.read(_MAX_PREVIEW)
+                text = raw.decode("utf-8", errors="replace")
+                if len(raw) >= _MAX_PREVIEW or path.stat().st_size > _MAX_PREVIEW:
                     text += "\n… (preview truncated)"
             except OSError as exc:
                 text = f"Could not read file: {exc}"

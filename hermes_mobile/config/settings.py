@@ -77,6 +77,10 @@ class HermesMobileSettings(BaseSettings):
     # Agent settings
     max_iterations: int = 20
     max_tokens: int = 8192
+    # Context-window budget used for mid-conversation compression. Kept
+    # separate from max_tokens (the per-response generation cap): using the
+    # output cap as the context budget compressed conversations far too early.
+    max_context_tokens: int = 128000
     temperature: float = 0.7
     system_prompt: str = """You are Hermes, a helpful AI assistant running on a mobile device.
 You have access to various tools and can help with a wide range of tasks.

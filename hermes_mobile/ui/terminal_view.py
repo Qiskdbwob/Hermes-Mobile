@@ -154,9 +154,7 @@ class TerminalView:
         self._lines.append(text)
         if len(self._lines) > MAX_LINES:
             self._lines = self._lines[-MAX_LINES:]
-        current = self.output_field.value or ""
-        current = "\n".join(self._lines)
-        self.output_field.value = current
+        self.output_field.value = "\n".join(self._lines)
         self.page.update()
 
     def _clear(self):

@@ -1,5 +1,6 @@
 """Tests for i18n/locales module."""
 
+import re
 from pathlib import Path
 
 from hermes_mobile.locales import (
@@ -15,6 +16,28 @@ from hermes_mobile.locales import (
     t,
     translate_dict,
 )
+
+_SOURCE_ROOT = Path(__file__).resolve().parent.parent / "hermes_mobile"
+
+
+def _used_t_keys() -> set[str]:
+    """All dotted keys passed to t() anywhere in the source tree."""
+    keys: set[str] = set()
+    pattern = re.compile(r"\bt\(\s*[\"']([^\"']+)[\"']")
+    for path in _SOURCE_ROOT.rglob("*.py"):
+        keys.update(pattern.findall(path.read_text(encoding="utf-8")))
+    return keys
+
+
+def _key_paths(data, prefix=""):
+    paths = set()
+    for key, value in data.items():
+        path = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            paths.update(_key_paths(value, path))
+        else:
+            paths.add(path)
+    return paths
 
 
 class TestConstants:
@@ -65,6 +88,16 @@ class TestLoadLocale:
             return paths
 
         assert key_paths(_load_locale("en")) == key_paths(_load_locale("pt-br"))
+
+    def test_every_source_t_key_exists_in_both_catalogs(self):
+        """Regression: a t() key missing from a catalog silently renders the
+        raw key (e.g. gateway.offline). No source key may go uncovered."""
+        used = _used_t_keys()
+        assert used, "no t() keys found — scanner may be broken"
+        en = _key_paths(_load_locale("en"))
+        pt = _key_paths(_load_locale("pt-br"))
+        assert used - en == set(), f"keys missing from en.json: {sorted(used - en)}"
+        assert used - pt == set(), f"keys missing from pt-br.json: {sorted(used - pt)}"
 
 
 class TestInit:
@@ -201,3 +234,34 @@ class TestCountKeys:
 
     def test_counts_nested_keys(self):
         assert _count_keys({"a": {"b": 1, "c": 2}, "d": 3}) == 3
+
+
+class TestFallbackCache:
+    """Regression: t() used to re-read and re-parse en.json on every call
+    while a non-English locale was active."""
+
+    def teardown_method(self):
+        init("en")
+
+    def test_english_fallback_is_loaded_once(self, monkeypatch):
+        import hermes_mobile.locales as locales
+
+        original_load = locales._load_locale
+        loads = []
+
+        def counting_load(name):
+            loads.append(name)
+            return original_load(name)
+
+        monkeypatch.setattr(locales, "_load_locale", counting_load)
+        assert set_locale("pt-br") is True
+        locales._en_fallback = None  # force a fresh cache
+
+        t("nav.chat")
+        t("nav.chat")
+        t("nav.settings")
+        t("settings.title")
+
+        # Exactly one English fallback load for all lookups.
+        assert loads.count("en") == 1
+        assert t("nav.chat") != "nav.chat"

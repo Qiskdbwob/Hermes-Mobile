@@ -28,6 +28,12 @@ from hermes_mobile.ui.theme import mode_colors
 
 logger = logging.getLogger(__name__)
 
+# Streaming flushes are coalesced: every chunk used to trigger a page.update()
+# round-trip to the Flutter client, which makes long responses janky on
+# Android. Chunks arriving within this window share one update; the value is
+# set immediately, only the frame push is debounced (finalize always flushes).
+_STREAM_UPDATE_INTERVAL = 0.05
+
 
 class ChatView:
     """Main chat interface"""
@@ -47,6 +53,8 @@ class ChatView:
         # Track the currently streaming assistant control
         self._streaming_control: Optional[ft.Text] = None
         self._streaming_container: Optional[ft.Container] = None
+        # Debounced page.update() task while streaming (see module docstring)
+        self._stream_update_task: Optional[asyncio.Task] = None
 
         # UI Components
         self.chat_list = ft.ListView(
@@ -98,7 +106,15 @@ class ChatView:
         self.pending_attachments: List[PendingAttachment] = []
         self.attachments_row = ft.Row([], spacing=6, wrap=True, visible=False)
         self.file_picker = ft.FilePicker()
-        if hasattr(self.page, "overlay") and self.file_picker not in self.page.overlay:
+        # Flet 0.84+ turned FilePicker into a *service* registered through
+        # page.services (auto-registered at construction). Older Flet (0.28 line,
+        # Python 3.9 CI) expects overlay registration. Appending a Service to
+        # page.overlay on modern Flet makes the client raise
+        # "Unknown control: filePicker" (red error screen, seen on Android APK).
+        if hasattr(self.page, "services"):
+            if self.file_picker not in self.page.services:
+                self.page.services.append(self.file_picker)
+        elif hasattr(self.page, "overlay") and self.file_picker not in self.page.overlay:
             self.page.overlay.append(self.file_picker)
 
     def build(self) -> ft.Control:
@@ -516,7 +532,34 @@ class ChatView:
             return
         self.current_assistant_text += chunk
         stream.value = self.current_assistant_text
-        self.page.update()
+        self._schedule_stream_flush()
+
+    def _schedule_stream_flush(self) -> None:
+        """Debounce page.update() while chunks are arriving fast."""
+        if self._stream_update_task is not None:
+            return
+
+        async def flush():
+            try:
+                await asyncio.sleep(_STREAM_UPDATE_INTERVAL)
+            except asyncio.CancelledError:
+                raise
+            finally:
+                self._stream_update_task = None
+            try:
+                self.page.update()
+            except Exception:
+                logger.debug("Streaming update failed", exc_info=True)
+
+        try:
+            self._stream_update_task = asyncio.get_running_loop().create_task(flush())
+        except RuntimeError:
+            # Structural tests build controls without Flet's event loop.
+            self._stream_update_task = None
+            try:
+                self.page.update()
+            except Exception:
+                pass
 
     def finalize_assistant_message(self):
         """Finalize the current assistant message — swap plain text for markdown"""
@@ -535,6 +578,10 @@ class ChatView:
         self._streaming_control = None
         self.current_assistant_text = ""
         self.current_tool_calls = []
+        # Rows stay visible in the transcript, but the id->row map must not
+        # grow for the whole session (it was only ever cleared by clear_chat).
+        self._tool_call_rows.clear()
+        self._cancel_stream_flush()
         self._scroll_to_bottom()
         self.page.update()
 
@@ -553,6 +600,12 @@ class ChatView:
         )
         self.chat_list.controls.append(self._streaming_container)
         self._scroll_to_bottom()
+        # Make the first chunk visible immediately; subsequent chunks are
+        # coalesced by _schedule_stream_flush.
+        try:
+            self.page.update()
+        except Exception:
+            pass
 
     def _copy_to_clipboard(self, text: str) -> None:
         self.page.set_clipboard(text)
@@ -957,6 +1010,12 @@ class ChatView:
         # and show an apparently empty resumed session until the user swipes.
         self._scroll_to_bottom(delay=0.12)
 
+    def _cancel_stream_flush(self) -> None:
+        task = self._stream_update_task
+        self._stream_update_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
     def clear_chat(self, show_welcome: bool = True):
         """Start a clean session in both the UI and agent runtime."""
         self.chat_list.controls.clear()
@@ -964,6 +1023,7 @@ class ChatView:
         self.current_assistant_text = ""
         self.current_tool_calls = []
         self._tool_call_rows.clear()
+        self._cancel_stream_flush()
         self._streaming_container = None
         self._streaming_control = None
         self._sending = False

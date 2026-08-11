@@ -16,8 +16,14 @@ class FakePage:
     height = 844
     overlay = []
 
+    def __init__(self):
+        self.dialogs = []
+
     def update(self):
         pass
+
+    def show_dialog(self, dialog):
+        self.dialogs.append(dialog)
 
 
 def walk_controls(control: ft.Control):
@@ -152,6 +158,32 @@ def test_workspace_filters_and_search_match_visible_project_files(tmp_path):
     view._active_kind = "all"
     view._query = "notes"
     assert [path.name for path in view._visible_files()] == ["notes.md"]
+
+
+def test_preview_large_binary_reads_only_preview_window(tmp_path):
+    """Regression: previewing a large non-image file must not read the whole
+    file into memory before truncating (OOM risk on Android)."""
+    app = make_app(tmp_path)
+    project = tmp_path / "projects" / "alpha"
+    project.mkdir(parents=True)
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "current_project.txt").write_text("alpha")
+    big = project / "clip.mp4"
+    big.write_bytes(b"\x00\x01\x02" * 500_000)  # ~1.5 MiB binary
+
+    view = ArtifactsView(app)
+    view._preview(big)
+
+    assert len(app.page.dialogs) == 1
+    dialog = app.page.dialogs[0]
+    preview_texts = [
+        str(control.value)
+        for control in walk_controls(dialog)
+        if isinstance(control, ft.Text) and control.value
+    ]
+    assert any("(preview truncated)" in text for text in preview_texts)
+    assert all(len(text) < 20_000 for text in preview_texts)
 
 
 @pytest.mark.asyncio

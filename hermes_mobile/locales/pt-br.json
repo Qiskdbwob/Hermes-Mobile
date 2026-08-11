@@ -192,11 +192,7 @@
     "pet_update_error": "Não foi possível atualizar o pet."
   },
   "gateway": {
-    "title": "Gateway",
-    "status": "Status",
-    "enabled": "Ativado",
-    "running": "Executando",
-    "stopped": "Parado",
+    "title": "Gateway","status": "Status", "offline": "Offline", "enabled": "Ativado", "running": "Executando", "stopped": "Parado",
     "port": "Porta",
     "platforms": "Plataformas",
     "pairing": "Pareamento",

@@ -657,6 +657,14 @@ class TestEnsureDefaultJobs:
         second = len(list_jobs())
         assert first == second
 
+    def test_default_jobs_use_sys_executable(self):
+        # Regression: jobs invoked `python -m ...`, but most distros (and the
+        # Android build) have no bare `python` binary — command not found.
+        import sys
+
+        for job_def in DEFAULT_JOBS:
+            assert f'"{sys.executable}" -m hermes_mobile.cron.' in job_def["command"]
+
 
 class TestJobsLock:
     def test_jobs_lock_acquire(self, temp_dir):
@@ -668,4 +676,34 @@ class TestJobsLock:
             with scheduler._jobs_lock():
                 pass
         finally:
+            scheduler._get_cron_dir = original
+
+    def test_jobs_lock_retries_then_times_out(self, temp_dir, monkeypatch):
+        # Regression: the file lock failed instantly on contention (no retry),
+        # so the ticker thread and the UI could not both touch jobs.json.
+        import fcntl
+
+        import hermes_mobile.cron.scheduler as scheduler
+
+        if scheduler.fcntl is None:
+            pytest.skip("fcntl unavailable")
+        monkeypatch.setattr(scheduler, "_JOBS_LOCK_TIMEOUT_SECONDS", 0.3)
+
+        original = scheduler._get_cron_dir
+        scheduler._get_cron_dir = lambda: temp_dir / "cron_lock_retry"
+        lock_path = temp_dir / "cron_lock_retry" / ".jobs.lock"
+        holder = None
+        try:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            holder = open(lock_path, "w")
+            fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+
+            # Should retry for ~0.3s and then raise instead of failing instantly.
+            with pytest.raises(TimeoutError, match="Could not acquire jobs lock"):
+                with scheduler._jobs_lock():
+                    pass
+        finally:
+            if holder is not None:
+                fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+                holder.close()
             scheduler._get_cron_dir = original

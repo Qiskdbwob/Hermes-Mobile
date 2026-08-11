@@ -344,8 +344,8 @@ class MobileAgent:
                 api_msg["name"] = msg.name
             messages.append(api_msg)
 
-        if supports_caching(self.settings.default_provider):
-            messages = apply_cache_control(messages, self.settings.default_provider)
+        if supports_caching(self.provider):
+            messages = apply_cache_control(messages, self.provider)
 
         return messages
 
@@ -362,7 +362,7 @@ class MobileAgent:
             self.iteration += 1
 
             api_messages = self.get_messages_for_api()
-            if needs_compression(api_messages, self.settings.max_tokens):
+            if needs_compression(api_messages, self.settings.max_context_tokens):
                 self.messages = self._apply_compression()
                 api_messages = self.get_messages_for_api()
 
@@ -464,7 +464,14 @@ class MobileAgent:
                 arguments = json.loads(raw["arguments"] or "{}")
             except json.JSONDecodeError:
                 logger.warning("Invalid JSON arguments for streamed tool %s", raw["name"])
-                arguments = {}
+                tc = ToolCall(
+                    name=raw["name"],
+                    arguments={},
+                    call_id=raw["id"] or str(uuid.uuid4()),
+                )
+                tc.error = f"Invalid JSON tool arguments: {raw['arguments'][:200]}"
+                tool_calls.append(tc)
+                continue
             tool_calls.append(
                 ToolCall(
                     name=raw["name"],
@@ -486,7 +493,14 @@ class MobileAgent:
                 try:
                     args = json.loads(tc.function.arguments)
                 except json.JSONDecodeError:
-                    args = {}
+                    tool_call = ToolCall(
+                        name=tc.function.name,
+                        arguments={},
+                        call_id=tc.id,
+                    )
+                    tool_call.error = f"Invalid JSON tool arguments: {tc.function.arguments[:200]}"
+                    tool_calls.append(tool_call)
+                    continue
 
                 tool_call = ToolCall(
                     name=tc.function.name,
@@ -505,27 +519,37 @@ class MobileAgent:
             if self.on_tool_call:
                 self.on_tool_call(tool_call)
 
-            try:
-                result = await self._execute_tool(tool_call.name, tool_call.arguments)
-                tool_call.result = result
+            if tool_call.error:
+                # The model produced unparseable arguments; surface the parse
+                # failure back to the model instead of executing with garbage.
                 tool_call.completed_at = datetime.now()
-
                 self.add_tool_result(
-                    json.dumps(result) if not isinstance(result, str) else result,
+                    f"Error: {tool_call.error}",
                     tool_call.call_id,
                     tool_call.name,
                 )
+            else:
+                try:
+                    result = await self._execute_tool(tool_call.name, tool_call.arguments)
+                    tool_call.result = result
+                    tool_call.completed_at = datetime.now()
 
-            except Exception as e:
-                logger.error(f"Tool {tool_call.name} failed: {e}")
-                tool_call.error = str(e)
-                tool_call.completed_at = datetime.now()
+                    self.add_tool_result(
+                        json.dumps(result) if not isinstance(result, str) else result,
+                        tool_call.call_id,
+                        tool_call.name,
+                    )
 
-                self.add_tool_result(
-                    f"Error: {str(e)}",
-                    tool_call.call_id,
-                    tool_call.name,
-                )
+                except Exception as e:
+                    logger.error(f"Tool {tool_call.name} failed: {e}")
+                    tool_call.error = str(e)
+                    tool_call.completed_at = datetime.now()
+
+                    self.add_tool_result(
+                        f"Error: {str(e)}",
+                        tool_call.call_id,
+                        tool_call.name,
+                    )
 
             if self.on_tool_result:
                 self.on_tool_result(tool_call)
@@ -1274,7 +1298,7 @@ class MobileAgent:
                     "type": "function",
                     "function": {
                         "name": "execute_code",
-                        "description": "Execute Python code in a sandboxed subprocess and return stdout/stderr",
+                        "description": "Execute Python code in a separate subprocess (same privileges as the app) and return stdout/stderr",
                         "parameters": {
                             "type": "object",
                             "properties": {
@@ -1632,31 +1656,51 @@ class MobileAgent:
         """Set available tools"""
         self.tools = tools
 
+    @staticmethod
+    def _dict_to_message(msg_dict: Dict[str, Any]) -> Message:
+        """Rebuild a Message from an API-format dict, preserving tool calls."""
+        role = msg_dict["role"]
+        content = msg_dict.get("content", "")
+        tool_calls = []
+        for tc in msg_dict.get("tool_calls", []) or []:
+            fn = tc.get("function", {})
+            try:
+                args = json.loads(fn.get("arguments", "{}") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            tool_calls.append(
+                ToolCall(
+                    name=fn.get("name", ""),
+                    arguments=args,
+                    call_id=tc.get("id") or str(uuid.uuid4()),
+                )
+            )
+        if role == "system":
+            return Message.system(content)
+        if role == "user":
+            return Message.user(content)
+        if role == "assistant":
+            return Message.assistant(content, tool_calls=tool_calls)
+        if role == "tool":
+            return Message.tool(
+                content,
+                msg_dict.get("tool_call_id", ""),
+                msg_dict.get("name", "unknown"),
+            )
+        return Message.user(content)
+
     def _apply_compression(self) -> List[Message]:
         """Compress conversation to save token space.
+
+        Rebuilds messages from the compressed API dicts while preserving
+        assistant tool_calls (dropping them orphans the tool result messages
+        that follow and makes the API reject the conversation).
 
         Returns new compressed message list.
         """
         api_messages = self.get_messages_for_api()
-        compressed = compress_messages(api_messages, self.settings.max_tokens)
-        new_messages = []
-        for msg_dict in compressed:
-            role = msg_dict["role"]
-            content = msg_dict.get("content", "")
-            if role == "system":
-                new_messages.append(Message.system(content))
-            elif role == "user":
-                new_messages.append(Message.user(content))
-            elif role == "assistant":
-                new_messages.append(Message.assistant(content))
-            elif role == "tool":
-                new_messages.append(
-                    Message.tool(
-                        content,
-                        msg_dict.get("tool_call_id", ""),
-                        msg_dict.get("name", "unknown"),
-                    )
-                )
+        compressed = compress_messages(api_messages, self.settings.max_context_tokens)
+        new_messages = [self._dict_to_message(msg_dict) for msg_dict in compressed]
         self.messages = new_messages
         logger.info(
             "Compressed conversation: %d -> %d messages", len(api_messages), len(new_messages)

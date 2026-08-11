@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -170,29 +171,38 @@ def _lock_file_path() -> Path:
 
 @contextlib.contextmanager
 def _jobs_lock():
-    """Cross-process advisory file lock for jobs.json."""
+    """Cross-process advisory file lock for jobs.json with bounded retry.
+
+    Uses a non-blocking flock so a stuck holder cannot hang the app, but
+    retries up to _JOBS_LOCK_TIMEOUT_SECONDS instead of failing on the first
+    contention (the ticker thread and the UI can touch jobs.json concurrently).
+    """
     lock_file = _lock_file_path()
     lock_file.parent.mkdir(parents=True, exist_ok=True)
 
-    lock_acquired = False
+    deadline = time.monotonic() + _JOBS_LOCK_TIMEOUT_SECONDS
     lock_fh = None
 
+    while True:
+        try:
+            lock_fh = open(lock_file, "w")
+            if fcntl:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            elif msvcrt:
+                msvcrt.locking(lock_fh.fileno(), msvcrt.LK_NBLCK, 1)
+            break
+        except (BlockingIOError, OSError):
+            if lock_fh is not None:
+                lock_fh.close()
+                lock_fh = None
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Could not acquire jobs lock")
+            time.sleep(0.05)
+
     try:
-        lock_fh = open(lock_file, "w")
-        if fcntl:
-            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        elif msvcrt:
-            msvcrt.locking(lock_fh.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            # No locking available
-            pass
-        lock_acquired = True
         yield
-    except (BlockingIOError, OSError):
-        # Lock not acquired - another process has it
-        raise TimeoutError("Could not acquire jobs lock")
     finally:
-        if lock_acquired and lock_fh:
+        if lock_fh is not None:
             try:
                 if fcntl:
                     fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
@@ -607,32 +617,36 @@ def get_ticker_status() -> Dict[str, Any]:
 # Default Jobs
 # ═══════════════════════════════════════════════════════════════
 
+# Resolve the real interpreter: most modern distros and Android builds have no
+# bare `python` binary, so `python -m ...` would fail with "command not found".
+_PYTHON = sys.executable or "python3"
+
 DEFAULT_JOBS = [
     {
         "name": "cleanup_expired_memory",
         "schedule": "0 3 * * *",  # Daily at 3 AM
-        "command": "python -m hermes_mobile.cron.cleanup_memory",
+        "command": f'"{_PYTHON}" -m hermes_mobile.cron.cleanup_memory',
         "description": "Clean up expired memory entries",
         "tags": ["maintenance", "memory"],
     },
     {
         "name": "sync_conversations",
         "schedule": "*/15 * * * *",  # Every 15 minutes
-        "command": "python -m hermes_mobile.cron.sync_conversations",
+        "command": f'"{_PYTHON}" -m hermes_mobile.cron.sync_conversations',
         "description": "Sync conversations to cloud",
         "tags": ["sync", "cloud"],
     },
     {
         "name": "check_updates",
         "schedule": "0 12 * * *",  # Daily at noon
-        "command": "python -m hermes_mobile.cron.check_updates",
+        "command": f'"{_PYTHON}" -m hermes_mobile.cron.check_updates',
         "description": "Check for app/skill updates",
         "tags": ["maintenance", "updates"],
     },
     {
         "name": "backup_data",
         "schedule": "0 4 * * *",  # Daily at 4 AM
-        "command": "python -m hermes_mobile.cron.backup_data",
+        "command": f'"{_PYTHON}" -m hermes_mobile.cron.backup_data',
         "description": "Backup data to cloud storage",
         "tags": ["backup", "maintenance"],
     },

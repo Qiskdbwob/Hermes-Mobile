@@ -238,7 +238,7 @@ class TestWebExtractTool:
             mock_client.get = AsyncMock(side_effect=TimeoutException("Timed out"))
 
             result = await web_extract_tool(urls=["https://example.com"])
-            assert "Timeout" in result["pages"][0].get("error", "")
+            assert "timed out" in result["pages"][0].get("error", "").lower()
 
     async def test_extract_generic_exception(self):
         with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
@@ -381,3 +381,66 @@ class TestBrowserSnapshotTool:
 
             result = await browser_snapshot_tool(url="https://example.com/404")
             assert "error" in result
+
+
+class TestSsrFProtection:
+    """SSRF guard: never let the agent fetch loopback/private/link-local hosts."""
+
+    def test_blocks_loopback_ip(self):
+        from hermes_mobile.tools.web_tools import _blocked_url_error
+
+        err = _blocked_url_error("http://127.0.0.1:8080/admin")
+        assert err is not None and "Blocked private" in err
+
+    def test_blocks_cloud_metadata(self):
+        from hermes_mobile.tools.web_tools import _blocked_url_error
+
+        err = _blocked_url_error("http://169.254.169.254/latest/meta-data/")
+        assert err is not None and "Blocked private" in err
+
+    def test_blocks_private_and_link_local_ip(self):
+        from hermes_mobile.tools.web_tools import _blocked_url_error
+
+        for url in ("http://10.0.0.5/secret", "http://192.168.1.10/x", "http://[::1]/"):
+            assert _blocked_url_error(url) is not None
+
+    def test_blocks_non_http_scheme(self):
+        from hermes_mobile.tools.web_tools import _blocked_url_error
+
+        err = _blocked_url_error("file:///etc/passwd")
+        assert err is not None and "scheme" in err
+
+    def test_allows_public_hostname(self):
+        from hermes_mobile.tools.web_tools import _blocked_url_error
+
+        # Real DNS resolution; if offline this returns None anyway (not blocked).
+        assert _blocked_url_error("https://example.com") is None
+
+    @patch("hermes_mobile.tools.web_tools.socket.getaddrinfo")
+    def test_blocks_hostname_resolving_to_private(self, mock_gai):
+        import socket
+
+        from hermes_mobile.tools.web_tools import _blocked_url_error
+
+        mock_gai.return_value = [(socket.AF_INET, 1, 6, "", ("192.168.1.50", 0))]
+        err = _blocked_url_error("http://internal.example/")
+        assert err is not None and "Blocked private" in err
+
+    async def test_navigate_blocks_private_host_before_fetch(self):
+        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
+            result = await browser_navigate_tool("http://127.0.0.1/admin")
+            assert "error" in result and "Blocked private" in result["error"]
+            mock_cls.return_value.__aenter__.return_value.get.assert_not_called()
+
+    async def test_redirect_to_private_is_blocked(self):
+        from hermes_mobile.tools.web_tools import _safe_get
+
+        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
+            client = mock_cls.return_value.__aenter__.return_value
+            redirect = _make_http_response(status_code=302, url="https://public.example/")
+            redirect.headers["location"] = "http://127.0.0.1/admin"
+            client.get = AsyncMock(return_value=redirect)
+
+            response, error = await _safe_get(client, "https://public.example/")
+            assert response is None
+            assert error is not None and "Blocked private" in error

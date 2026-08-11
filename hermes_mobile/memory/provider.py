@@ -203,6 +203,11 @@ class MobileMemoryProvider:
             content = msg.content
             if self.encrypt:
                 content = self._encrypt(content)
+                # Tool results can carry sensitive data (file contents, shell
+                # output, web pages); encrypt them too, not just the message
+                # content. Old plaintext rows still decrypt as no-ops.
+                if tool_calls_json:
+                    tool_calls_json = self._encrypt(tool_calls_json)
 
             cursor.execute(
                 """
@@ -245,10 +250,16 @@ class MobileMemoryProvider:
             if self.encrypt:
                 content = self._decrypt(content)
 
+            raw_tool_calls = row["tool_calls"]
+            if raw_tool_calls and self.encrypt:
+                # _decrypt() returns input unchanged on failure, so legacy
+                # plaintext rows (and old encrypted rows) both parse fine.
+                raw_tool_calls = self._decrypt(raw_tool_calls)
+
             msg = {
                 "role": row["role"],
                 "content": content,
-                "tool_calls": json.loads(row["tool_calls"]) if row["tool_calls"] else [],
+                "tool_calls": json.loads(raw_tool_calls) if raw_tool_calls else [],
                 "tool_call_id": row["tool_call_id"],
                 "name": row["name"],
                 "timestamp": row["timestamp"],
@@ -257,6 +268,105 @@ class MobileMemoryProvider:
             messages.append(msg)
 
         return messages
+
+    async def list_conversations(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """List conversation session summaries, most recently active first.
+
+        Each summary carries the session id, message count, last activity
+        timestamp and a preview of the latest message (decrypted).
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT session_id, COUNT(*) AS message_count, MAX(timestamp) AS last_at
+            FROM conversations
+            GROUP BY session_id
+            ORDER BY last_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        summaries = []
+        for row in cursor.fetchall():
+            sid = row["session_id"]
+            cursor.execute(
+                "SELECT content FROM conversations WHERE session_id = ? ORDER BY timestamp DESC LIMIT 1",
+                (sid,),
+            )
+            last = cursor.fetchone()
+            preview = ""
+            if last is not None and last["content"]:
+                preview = self._decrypt(last["content"]) if self.encrypt else last["content"]
+                preview = " ".join(preview.split())[:120]
+            summaries.append(
+                {
+                    "id": sid,
+                    "message_count": int(row["message_count"]),
+                    "timestamp": row["last_at"],
+                    "preview": preview,
+                }
+            )
+        return summaries
+
+    async def list_memory_entries(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """List long-term memory entries, newest first, excluding expired."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, session_id, content, created_at, expires_at
+            FROM memory_entries
+            WHERE expires_at IS NULL OR expires_at > ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (datetime.now().isoformat(), limit),
+        )
+        entries = []
+        for row in cursor.fetchall():
+            content = self._decrypt(row["content"]) if self.encrypt else row["content"]
+            entries.append(
+                {
+                    "id": row["id"],
+                    "session_id": row["session_id"],
+                    "content": content,
+                    "created_at": row["created_at"],
+                    "expires_at": row["expires_at"],
+                }
+            )
+        return entries
+
+    async def list_skill_memory(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """List skill memory entries, newest first, excluding expired."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT skill_name, key, value, created_at, expires_at
+            FROM skill_memory
+            WHERE expires_at IS NULL OR expires_at > ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (datetime.now().isoformat(), limit),
+        )
+        entries = []
+        for row in cursor.fetchall():
+            stored = self._decrypt(row["value"]) if self.encrypt else row["value"]
+            try:
+                value = json.loads(stored)
+            except (json.JSONDecodeError, TypeError):
+                value = stored
+            entries.append(
+                {
+                    "skill_name": row["skill_name"],
+                    "key": row["key"],
+                    "value": value,
+                    "created_at": row["created_at"],
+                }
+            )
+        return entries
 
     async def add_memory_entry(
         self,

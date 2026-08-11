@@ -585,6 +585,10 @@ class TestMobileAgent:
         result = agent._extract_tool_calls(response)
         assert len(result) == 1
         assert result[0].arguments == {}
+        # The parse failure is surfaced back to the model instead of being
+        # silently swallowed (which executed the tool with garbage args).
+        assert result[0].error is not None
+        assert "Invalid JSON" in result[0].error
 
     async def test_execute_tool_calls_success(self):
         agent = MobileAgent()
@@ -876,3 +880,57 @@ class TestPromptCaching:
         ]
         result = apply_cache_control(messages, "openrouter")
         assert len(result) == 2
+
+
+class TestAgentSecurityHardening:
+    def test_get_messages_for_api_cache_uses_active_provider(self):
+        # Regression: caching was keyed to settings.default_provider instead of
+        # the agent's active provider, so switching providers at runtime applied
+        # (or skipped) cache breakpoints for the wrong provider.
+        agent = MobileAgent()
+        agent.add_user_message("Hi")
+        api = agent.get_messages_for_api()
+        assert any("cache_control" in m for m in api)  # openrouter supports caching
+
+        agent.reconfigure(provider="openai", model="gpt-4o-mini")
+        api = agent.get_messages_for_api()
+        assert not any("cache_control" in m for m in api)  # openai does not
+
+    def test_apply_compression_preserves_assistant_tool_calls(self):
+        # Regression: rebuilding compressed messages with Message.assistant(content)
+        # dropped tool_calls, orphaning the tool result messages that follow and
+        # making the API reject the conversation.
+        agent = MobileAgent()
+        agent.settings.max_context_tokens = 1  # force compression to trigger
+        tc = ToolCall(name="web_search", arguments={"query": "x"}, call_id="c1")
+        for i in range(8):
+            agent.add_user_message(f"u{i}")
+            agent.add_assistant_message(f"a{i}")
+        agent.add_user_message("final")
+        agent.add_assistant_message("", tool_calls=[tc])
+        agent.add_tool_result('{"ok": true}', "c1", "web_search")
+
+        agent._apply_compression()
+
+        assert len(agent.messages) < 20  # actually compressed
+        for i, msg in enumerate(agent.messages):
+            if msg.role == "tool":
+                prev = agent.messages[i - 1]
+                assert prev.role == "assistant"
+                assert any(c.call_id == msg.tool_call_id for c in prev.tool_calls)
+
+    @pytest.mark.asyncio
+    async def test_execute_tool_calls_skips_tool_with_parse_error(self):
+        # A tool whose JSON arguments failed to parse must not execute with
+        # garbage; the parse error is returned to the model instead.
+        agent = MobileAgent()
+        agent._execute_tool = AsyncMock(side_effect=AssertionError("must not run"))
+        tc = ToolCall(name="web_search", arguments={})
+        tc.error = "Invalid JSON tool arguments: {"
+
+        await agent._execute_tool_calls([tc])
+
+        assert len(agent.messages) == 1
+        assert agent.messages[0].role == "tool"
+        assert "Invalid JSON" in agent.messages[0].content
+        agent._execute_tool.assert_not_called()

@@ -17,13 +17,21 @@ from typing import Any, Dict, List, Optional
 
 from hermes_mobile.tools.path_security import validate_and_resolve_path
 
+# Skip files larger than this when searching contents (regex scanning a huge
+# binary can stall the agent for seconds and exhaust memory).
+MAX_FILE_BYTES = 1_048_576  # 1 MiB
+
 # ---------------------------------------------------------------------------
 # execute_code — run Python in a sandboxed subprocess with a hard timeout
 # ---------------------------------------------------------------------------
 
 
 async def execute_code_tool(code: str, timeout: int = 60) -> Dict[str, Any]:
-    """Execute Python code in a subprocess and return stdout/stderr."""
+    """Execute Python code in a separate subprocess and return stdout/stderr.
+
+    Note: this is a separate process, not a security sandbox — the child runs
+    with the same OS privileges (filesystem, network) as the app.
+    """
     if not code or not code.strip():
         return {"error": "No code provided"}
 
@@ -108,6 +116,8 @@ def _search_content(
                     continue
                 fpath = Path(root) / fname
                 try:
+                    if fpath.stat().st_size > MAX_FILE_BYTES:
+                        continue
                     text = fpath.read_text(errors="replace")
                 except Exception:
                     continue

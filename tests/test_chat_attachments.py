@@ -24,6 +24,7 @@ class FakePage:
 
     def __init__(self):
         self.overlay = []
+        self.services = []
         self.updates = 0
 
     def update(self):
@@ -123,8 +124,25 @@ def test_chat_consumes_attachments_into_outgoing_prompt(tmp_path: Path):
     assert view.attachments_row.visible is False
 
 
-def test_chat_build_adds_file_picker_to_overlay(tmp_path: Path):
+def test_chat_build_registers_file_picker_as_service(tmp_path: Path):
+    """Flet 0.84+ treats FilePicker as a service registered on page.services.
+
+    Registering it on page.overlay instead makes the client raise
+    "Unknown control: filePicker" (red error screen on the Android APK).
+    """
     app = fake_app(tmp_path)
+    view = ChatView(app)
+    root = view.build()
+
+    assert root is not None
+    assert view.file_picker in app.page.services
+    assert view.file_picker not in app.page.overlay
+
+
+def test_chat_build_legacy_overlay_registration_when_no_services(tmp_path: Path):
+    """Legacy Flet (0.28 line) has no page.services; FilePicker stays an overlay control."""
+    app = fake_app(tmp_path)
+    delattr(app.page, "services")
     view = ChatView(app)
     root = view.build()
 

@@ -19,9 +19,19 @@ from hermes_mobile.ui.theme import mode_colors
 MONO_FONT = "monospace"
 
 
+def _page_dark(page: ft.Page) -> bool:
+    """Effective dark mode, honoring the SYSTEM theme like app.dark_mode."""
+    mode = getattr(page, "theme_mode", None)
+    if mode == ft.ThemeMode.DARK:
+        return True
+    if mode == ft.ThemeMode.LIGHT:
+        return False
+    return getattr(page, "platform_brightness", None) == ft.Brightness.DARK
+
+
 def snack(page: ft.Page, text: str, error: bool = False):
     """Show a themed snack bar."""
-    c = mode_colors(getattr(page, "theme_mode", None) == ft.ThemeMode.DARK)
+    c = mode_colors(_page_dark(page))
     platform = str(
         getattr(getattr(page, "platform", None), "value", getattr(page, "platform", ""))
     ).lower()

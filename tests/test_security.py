@@ -315,3 +315,33 @@ class TestSafeCalculateEdgeCases:
         evaluator = ExpressionEvaluator()
         with pytest.raises(ValueError, match="Unknown bool op"):
             evaluator.visit(node)
+
+
+class TestChainedComparisonsAndLimits:
+    def test_chained_comparisons_are_correct(self):
+        # Regression: 5 < 2 < 3 used to return True and 3 == 3 == 3 returned False.
+        assert safe_calculate("5 < 2 < 3") is False
+        assert safe_calculate("1 < 2 < 3") is True
+        assert safe_calculate("3 == 3 == 3") is True
+        assert safe_calculate("1 == 2 == 2") is False
+        assert safe_calculate("1 > 2 < 3") is False
+        assert safe_calculate("5 > 2 > 1") is True
+        assert safe_calculate("1 <= 2 <= 3") is True
+
+    def test_container_literals_rejected(self):
+        # Regression: [1, 2, 3] used to silently evaluate to 3 (stack artifact).
+        for expr in ("[1, 2, 3]", "(1, 2, 3)", "{'a': 1}", "{1, 2}"):
+            result = safe_calculate(expr)
+            assert isinstance(result, str)
+            assert "unsafe" in result.lower()
+
+    def test_exponent_cap(self):
+        # DoS guard: 9**9**9 / 2**10**10 previously could hang or exhaust memory.
+        assert isinstance(safe_calculate("2 ** 10001"), str)
+        assert isinstance(safe_calculate("9 ** 9 ** 9"), str)
+        assert isinstance(safe_calculate("2 ** 10 ** 10"), str)
+
+    def test_expression_length_cap(self):
+        result = safe_calculate("1" + "+1" * 300)
+        assert isinstance(result, str)
+        assert "too long" in result.lower()

@@ -150,6 +150,66 @@ class TestCompressMessages:
         assert tail == last_original
 
 
+class TestCompressionToolCallBoundaries:
+    def test_tail_never_starts_with_orphaned_tool_message(self):
+        # The naive cut (last TAIL_PRESERVE_COUNT) lands on a "tool" message
+        # whose assistant(tool_calls) was summarized away. The compressed
+        # history must never start its tail with an orphaned tool result.
+        messages = [
+            {"role": "system", "content": "S"},
+            {"role": "user", "content": "u0"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "web_search", "arguments": "{}"}, "id": "c1"}],
+            },
+            {"role": "tool", "content": "r1", "tool_call_id": "c1", "name": "web_search"},
+            {"role": "tool", "content": "r2", "tool_call_id": "c1", "name": "web_search"},
+            {"role": "user", "content": "u1"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "get_time", "arguments": "{}"}, "id": "c2"}],
+            },
+            {"role": "tool", "content": "t", "tool_call_id": "c2", "name": "get_time"},
+            {"role": "user", "content": "u2"},
+            {"role": "assistant", "content": "a2"},
+        ]
+        # Naive tail_start (10 - 6) lands exactly on an orphaned tool message.
+        assert messages[4]["role"] == "tool"
+
+        result = compress_messages(messages)
+        rest = result[1:]  # after the system prompt
+        assert rest, "compression must keep a tail"
+        assert rest[0]["role"] != "tool"
+        for i, m in enumerate(rest):
+            if m["role"] == "tool":
+                assert i > 0 and rest[i - 1]["role"] == "assistant"
+                assert rest[i - 1].get("tool_calls"), "tool result needs its assistant call"
+
+    def test_tail_preserves_assistant_tool_calls_and_results(self):
+        messages = [{"role": "system", "content": "S"}]
+        for i in range(4):
+            messages.append({"role": "user", "content": f"u{i}"})
+            messages.append({"role": "assistant", "content": f"a{i}"})
+        messages.append({"role": "user", "content": "u4"})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "web_search", "arguments": "{}"}, "id": "c9"}],
+            }
+        )
+        messages.append(
+            {"role": "tool", "content": "r", "tool_call_id": "c9", "name": "web_search"}
+        )
+
+        result = compress_messages(messages)
+        tail = result[1:]
+        assert any(m.get("tool_calls") for m in tail)
+        assert any(m["role"] == "tool" for m in tail)
+
+
 class TestGetConversationStats:
     def test_empty_conversation(self):
         stats = get_conversation_stats([])

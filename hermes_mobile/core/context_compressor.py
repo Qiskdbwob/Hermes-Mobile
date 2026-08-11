@@ -65,7 +65,18 @@ def compress_messages(
         return messages
 
     system_prompt = messages[0] if messages[0].get("role") == "system" else None
-    tail_start = max(1, len(messages) - TAIL_PRESERVE_COUNT)
+    tail_start = (
+        max(1, len(messages) - TAIL_PRESERVE_COUNT)
+        if system_prompt
+        else max(0, len(messages) - TAIL_PRESERVE_COUNT)
+    )
+    # Never let the preserved tail start with an orphaned "tool" message: a
+    # tool result must stay with the assistant(tool_calls) message it answers
+    # (both belong to the summarized middle). Otherwise the rebuilt history is
+    # rejected by the API ("Messages with role 'tool' must be a response to a
+    # preceding message with 'tool_calls'").
+    while tail_start < len(messages) and messages[tail_start].get("role") == "tool":
+        tail_start += 1
     middle = messages[1:tail_start] if system_prompt else messages[:tail_start]
     tail = messages[tail_start:]
 

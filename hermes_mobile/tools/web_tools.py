@@ -7,10 +7,12 @@ for lightweight page navigation without CDP.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
-from typing import Any, Dict, List
-from urllib.parse import parse_qs, urlparse
+import socket
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -25,6 +27,91 @@ USER_AGENT = (
 SEARCH_TIMEOUT = 15.0
 EXTRACT_TIMEOUT = 20.0
 MAX_EXTRACT_CHARS = 8000
+MAX_REDIRECTS = 3
+
+
+# ═══════════════════════════════════════════════════════════════
+# SSRF guards — never let the agent fetch loopback/private hosts
+# ═══════════════════════════════════════════════════════════════
+
+
+def _blocked_url_error(url: str) -> Optional[str]:
+    """Return an error string when *url* is unsafe (bad scheme or private host).
+
+    Rejects non-http(s) schemes and hosts that resolve to loopback, private,
+    link-local, reserved, multicast or unspecified addresses (cloud metadata
+    at 169.254.169.254 and LAN services included). Hostnames are resolved at
+    validation time; DNS rebinding between check and fetch is outside this
+    guard's scope.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return f"Unsupported URL scheme: {parsed.scheme or 'none'}"
+    host = parsed.hostname
+    if not host:
+        return "URL has no host"
+
+    try:
+        ip = ipaddress.ip_address(host)
+        addresses = {str(ip)}
+    except ValueError:
+        # Hostname: resolve and check every address it can reach.
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except (socket.gaierror, OSError):
+            return None  # Let the fetch fail naturally if DNS is broken.
+        addresses = {info[4][0] for info in infos}
+
+    for raw in addresses:
+        try:
+            addr = ipaddress.ip_address(raw)
+        except ValueError:
+            continue
+        if (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_reserved
+            or addr.is_multicast
+            or addr.is_unspecified
+        ):
+            return f"Blocked private/internal address: {host}"
+    return None
+
+
+async def _safe_get(
+    client: httpx.AsyncClient,
+    url: str,
+) -> Tuple[Optional[httpx.Response], Optional[str]]:
+    """GET *url* with an SSRF check and bounded manual redirects.
+
+    Redirects are followed one hop at a time so every target URL is validated
+    (auto-follow would silently redirect into private hosts). Returns
+    (response, None) or (None, error).
+    """
+    current = url
+    for _ in range(MAX_REDIRECTS + 1):
+        error = _blocked_url_error(current)
+        if error:
+            return None, error
+        try:
+            response = await client.get(
+                current,
+                headers={"User-Agent": USER_AGENT},
+                follow_redirects=False,
+            )
+        except httpx.TimeoutException:
+            return None, "Request timed out"
+        except Exception as exc:  # noqa: BLE001 - surfaced to the model as text
+            return None, str(exc)
+        if response.is_redirect:
+            location = response.headers.get("location")
+            if not location:
+                return response, None
+            current = urljoin(str(response.url), location)
+            continue
+        return response, None
+    return None, "Too many redirects"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -144,46 +231,44 @@ async def web_extract_tool(
 
     async with httpx.AsyncClient(timeout=EXTRACT_TIMEOUT) as client:
         for url in urls[:5]:
-            try:
-                response = await client.get(
-                    url,
-                    headers={"User-Agent": USER_AGENT},
-                    follow_redirects=True,
-                )
+            if not url.startswith(("http://", "https://")):
+                url = "https://" + url
+            response, error = await _safe_get(client, url)
+            if error:
+                results.append({"url": url, "content": "", "error": error})
+                continue
+            if response is None:
+                results.append({"url": url, "content": "", "error": "No response"})
+                continue
 
-                if response.status_code != 200:
-                    results.append(
-                        {
-                            "url": url,
-                            "content": "",
-                            "error": f"HTTP {response.status_code}",
-                        }
-                    )
-                    continue
-
-                content_type = response.headers.get("content-type", "")
-                if "text/html" not in content_type:
-                    results.append(
-                        {
-                            "url": url,
-                            "content": response.text[:max_chars],
-                        }
-                    )
-                    continue
-
-                text = _clean_html(response.text)
+            if response.status_code != 200:
                 results.append(
                     {
                         "url": url,
-                        "content": text[:max_chars],
-                        "title": _extract_title(response.text),
+                        "content": "",
+                        "error": f"HTTP {response.status_code}",
                     }
                 )
+                continue
 
-            except httpx.TimeoutException:
-                results.append({"url": url, "content": "", "error": "Timeout"})
-            except Exception as e:
-                results.append({"url": url, "content": "", "error": str(e)})
+            content_type = response.headers.get("content-type", "")
+            if "text/html" not in content_type:
+                results.append(
+                    {
+                        "url": url,
+                        "content": response.text[:max_chars],
+                    }
+                )
+                continue
+
+            text = _clean_html(response.text)
+            results.append(
+                {
+                    "url": url,
+                    "content": text[:max_chars],
+                    "title": _extract_title(response.text),
+                }
+            )
 
     return {"pages": results}
 
@@ -203,11 +288,11 @@ async def browser_navigate_tool(url: str) -> Dict[str, Any]:
 
     try:
         async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT) as client:
-            response = await client.get(
-                url,
-                headers={"User-Agent": USER_AGENT},
-                follow_redirects=True,
-            )
+            response, error = await _safe_get(client, url)
+            if error:
+                return {"url": url, "error": error}
+            if response is None:
+                return {"url": url, "error": "No response"}
 
             if response.status_code != 200:
                 return {

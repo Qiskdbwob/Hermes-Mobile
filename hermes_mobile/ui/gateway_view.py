@@ -588,13 +588,21 @@ class GatewayView:
             snack(self.page, "Failed to revoke code", error=True)
 
     def _toggle_gateway(self, enabled: bool):
-        if self.gateway_manager:
-            self.gateway_manager.config.enabled = enabled
-            if enabled:
-                asyncio.create_task(self.gateway_manager.start())
-            else:
-                asyncio.create_task(self.gateway_manager.stop())
-            self._refresh()
+        if not self.gateway_manager:
+            return
+        self.gateway_manager.config.enabled = enabled
+        # Persist the toggle — previously it only lived in the in-memory
+        # config and reverted on the next app start.
+        try:
+            self.app.settings.gateway_enabled = enabled
+            save_settings(self.app.settings)
+        except Exception:
+            logger.exception("Could not persist gateway toggle")
+        if enabled:
+            asyncio.create_task(self.gateway_manager.start())
+        else:
+            asyncio.create_task(self.gateway_manager.stop())
+        self._refresh()
 
     def _refresh(self):
         self.app.content_area.content = self.build()
