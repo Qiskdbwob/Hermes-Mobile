@@ -189,7 +189,6 @@ class MobilePet:
         self._frame %= count
         self._image.left = -(self._frame * self._frame_w * self._scale)
         self._image.top = -(self._state_row(state) * self._frame_h * self._scale)
-        moved = False
         if roam:
             width = max(120.0, float(getattr(self.page, "width", 360) or 360))
             self._x += 2.2 * self._direction
@@ -201,11 +200,10 @@ class MobilePet:
                 self._x = 12.0
                 self._direction = 1
             self.layer.left = self._x
-            moved = True
         try:
-            self._image.update()
-            if moved:
-                self.layer.update()
+            # One frame push per tick: the sprite lives inside the layer, so a
+            # single layer.update() ships both the frame and the position.
+            self.layer.update()
         except (AssertionError, RuntimeError, AttributeError):
             # Tests and pre-mount refreshes configure controls before they are
             # attached to a Page. The next mounted frame carries this state.

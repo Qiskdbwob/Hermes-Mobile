@@ -106,6 +106,25 @@ class RemoteSecretStore(_EncryptedSecretStore):
         super().__init__(data_dir, "remote")
 
 
+class GatewaySecretStore(_EncryptedSecretStore):
+    """Encrypted token storage for the local messaging gateway.
+
+    Holds the Telegram bot token entered from the in-app Messaging view so the
+    gateway keeps working across restarts without a .env file on device.
+    """
+
+    _TOKEN_KEY = "telegram_bot_token"
+
+    def __init__(self, data_dir: str | Path) -> None:
+        super().__init__(data_dir, "gateway")
+
+    def get_token(self) -> str:
+        return self.load().get(self._TOKEN_KEY, "")
+
+    def save_token(self, token: str) -> None:
+        self.save(**{self._TOKEN_KEY: str(token).strip()})
+
+
 class ProviderSecretStore(_EncryptedSecretStore):
     """Encrypted API-key storage keyed by canonical local provider slug."""
 

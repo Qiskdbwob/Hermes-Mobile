@@ -40,6 +40,17 @@ def snack(page: ft.Page, text: str, error: bool = False):
         isinstance(width, (int, float)) and 0 < width <= 600
     )
     content = ft.Text(text, color=c["destructive"] if error else c["foreground"])
+    # Flet keeps dismissed SnackBars in page.overlay forever, so repeated
+    # feedback would accumulate in the control tree for the whole session
+    # (memory creep + heavier update payloads on Android). Close and drop any
+    # previously shown snackbar before mounting the new one.
+    try:
+        for old in list(page.overlay):
+            if isinstance(old, ft.SnackBar):
+                old.open = False
+                page.overlay.remove(old)
+    except (AttributeError, ValueError):
+        pass
     sb = ft.SnackBar(
         content=content,
         bgcolor=c["popover"],

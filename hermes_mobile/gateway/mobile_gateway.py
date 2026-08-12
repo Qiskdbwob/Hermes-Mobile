@@ -637,9 +637,19 @@ class GatewayManager:
         if platform == "telegram":
             from hermes_mobile.gateway.telegram_adapter import TelegramAdapter
 
+            # Env var wins (classic desktop/server flow); the in-app Messaging
+            # settings store is the fallback so the token entered on device
+            # works without a .env file.
             token = os.getenv("TELEGRAM_BOT_TOKEN", "")
             if not token:
-                logger.warning("TELEGRAM_BOT_TOKEN not set, skipping Telegram adapter")
+                from hermes_mobile.remote.secrets import GatewaySecretStore
+
+                token = GatewaySecretStore(self.settings.get_data_dir()).get_token()
+            if not token:
+                logger.warning(
+                    "TELEGRAM_BOT_TOKEN not set (env or Messaging settings), "
+                    "skipping Telegram adapter"
+                )
                 return
             adapter = TelegramAdapter(token=token, on_message=self.handle_message)
             self.adapters[platform] = adapter

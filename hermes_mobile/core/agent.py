@@ -167,6 +167,9 @@ class MobileAgent:
         self.skill_manager = skill_manager
         self.blocked_tools = frozenset(blocked_tools or ())
         self.process_registry = MobileProcessRegistry()
+        # Active project workspace (set by project_switch / the artifacts view).
+        # File tools resolve relative paths and extra sandbox roots against it.
+        self._workspace: Optional[Path] = None
 
         # Callbacks for UI updates
         self.on_tool_call = on_tool_call
@@ -580,7 +583,6 @@ class MobileAgent:
             "patch": self._tool_patch,
             "terminal": self._tool_terminal,
             "process": self._tool_process,
-            "run_command": self._tool_run_command,
             "execute_code": self._tool_execute_code,
             "get_time": self._tool_get_time,
             "calculate": self._tool_calculate,
@@ -619,9 +621,17 @@ class MobileAgent:
         """Search the web using DuckDuckGo."""
         return await web_search_tool(query, max_results=max_results)
 
+    def _file_scope(self) -> Dict[str, Any]:
+        """Extra sandbox roots + base dir for file tools when a workspace is active."""
+        ws = getattr(self, "_workspace", None)
+        return {
+            "extra_dirs": [ws] if ws is not None else None,
+            "base_dir": ws if ws is not None else None,
+        }
+
     async def _tool_read_file(self, path: str) -> str:
         """Read a file with path security validation."""
-        resolved, error = validate_and_resolve_path(path)
+        resolved, error = validate_and_resolve_path(path, **self._file_scope())
         if error:
             return f"Error: {error}"
         try:
@@ -631,7 +641,7 @@ class MobileAgent:
 
     async def _tool_write_file(self, path: str, content: str) -> str:
         """Write a file with path security validation."""
-        resolved, error = validate_and_resolve_path(path)
+        resolved, error = validate_and_resolve_path(path, **self._file_scope())
         if error:
             return f"Error: {error}"
         try:
@@ -643,10 +653,11 @@ class MobileAgent:
 
     async def _tool_list_files(self, path: str = ".") -> List[str]:
         """List files in a directory with path security."""
+        workspace = getattr(self, "_workspace", None)
         if path == ".":
-            resolved = Path.cwd()
+            resolved = workspace if workspace is not None else Path.cwd()
         else:
-            resolved, error = validate_and_resolve_path(path)
+            resolved, error = validate_and_resolve_path(path, **self._file_scope())
             if error:
                 return [f"Error: {error}"]
         try:
@@ -669,6 +680,7 @@ class MobileAgent:
             target=target,
             file_glob=file_glob,
             limit=limit,
+            **self._file_scope(),
         )
 
     async def _tool_patch(
@@ -684,6 +696,7 @@ class MobileAgent:
             old_string=old_string,
             new_string=new_string,
             replace_all=replace_all,
+            **self._file_scope(),
         )
 
     async def _tool_execute_code(self, code: str, timeout: int = 60) -> Dict[str, Any]:
@@ -772,7 +785,7 @@ class MobileAgent:
             return {"error": result["error"], "stdout": result.get("output", "")}
         return {
             "stdout": result.get("output", ""),
-            "stderr": "",
+            "stderr": result.get("stderr", ""),
             "returncode": result.get("exit_code"),
         }
 
@@ -1069,21 +1082,6 @@ class MobileAgent:
                                 "limit": {"type": "integer", "default": 200},
                             },
                             "required": ["action"],
-                        },
-                    },
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "run_command",
-                        "description": "Run a shell command",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "command": {"type": "string", "description": "Command to run"},
-                                "cwd": {"type": "string", "description": "Working directory"},
-                            },
-                            "required": ["command"],
                         },
                     },
                 },

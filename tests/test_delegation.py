@@ -293,3 +293,46 @@ class TestDelegateParallelTasks:
             result = await delegate_parallel_tasks(many_tasks)
             assert len(result["results"]) == 3  # MAX_CONCURRENT_SUBAGENTS = 3
             assert result["task_count"] == 3
+
+
+class TestDelegateTaskWithAgent:
+    @patch("hermes_mobile.core.delegation._quick_tool_call")
+    async def test_uses_agent_route_when_provided(self, mock_quick):
+        from types import SimpleNamespace
+
+        mock_quick.return_value = "agent result"
+        agent = SimpleNamespace(provider="openai", model="gpt-4o")
+        agent._get_api_key = lambda: "sk-agent"
+
+        result = await delegate_task("task", agent=agent)
+
+        assert result["result"] == "agent result"
+        call_kwargs = mock_quick.call_args.kwargs
+        assert call_kwargs["provider_url"] == "https://api.openai.com/v1"
+        assert call_kwargs["api_key"] == "sk-agent"
+        assert call_kwargs["model"] == "gpt-4o"
+
+    @patch("hermes_mobile.core.delegation._quick_tool_call")
+    async def test_rejects_non_chat_completions_provider(self, mock_quick):
+        from types import SimpleNamespace
+
+        agent = SimpleNamespace(provider="anthropic", model="claude")
+        agent._get_api_key = lambda: "sk-ant"
+
+        result = await delegate_task("task", agent=agent)
+
+        mock_quick.assert_not_awaited()
+        assert "use OpenRouter" in result["result"]
+
+    @patch("hermes_mobile.core.delegation.delegate_task")
+    async def test_parallel_passes_agent_through(self, mock_delegate):
+        from types import SimpleNamespace
+
+        mock_delegate.return_value = {"task": "t", "result": "done"}
+        agent = SimpleNamespace(provider="openai", model="gpt-4o")
+
+        await delegate_parallel_tasks(["a", "b"], agent=agent)
+
+        assert mock_delegate.call_count == 2
+        for call in mock_delegate.call_args_list:
+            assert call.kwargs.get("agent") is agent

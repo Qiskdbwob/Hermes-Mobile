@@ -2,6 +2,8 @@
 
 The registry is intentionally per-agent: process handles never leak between
 sessions, and every action works with Android's bundled shell when available.
+stdout and stderr are captured separately so callers (terminal view, model
+tools) can render them distinctly.
 """
 
 from __future__ import annotations
@@ -16,6 +18,11 @@ from typing import Any
 
 MAX_OUTPUT_BYTES = 1_000_000
 
+# Finished sessions are kept for a short grace period (so callers can still
+# read their output after exit), then evicted to bound memory on-device.
+SESSION_RETENTION_SECONDS = 300.0
+MAX_SESSIONS = 32
+
 
 @dataclass
 class ProcessSession:
@@ -24,8 +31,10 @@ class ProcessSession:
     process: asyncio.subprocess.Process
     started_at: float = field(default_factory=time.monotonic)
     output: bytearray = field(default_factory=bytearray)
+    stderr: bytearray = field(default_factory=bytearray)
     poll_cursor: int = 0
-    reader_task: asyncio.Task[None] | None = None
+    stderr_cursor: int = 0
+    reader_tasks: list[asyncio.Task[None]] = field(default_factory=list)
 
     @property
     def running(self) -> bool:
@@ -46,6 +55,7 @@ class MobileProcessRegistry:
         timeout: int | None = 180,
         background: bool = False,
     ) -> dict[str, Any]:
+        self._prune_sessions()
         if not isinstance(command, str) or not command.strip():
             return {"error": "Command is required"}
         command = command.strip()
@@ -56,7 +66,7 @@ class MobileProcessRegistry:
                 cwd=cwd,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
+                stderr=asyncio.subprocess.PIPE,
                 start_new_session=os.name == "posix",
             )
         except Exception as exc:
@@ -65,28 +75,37 @@ class MobileProcessRegistry:
         if not background:
             try:
                 communicate = process.communicate()
-                output, _ = (
+                out, err = (
                     await asyncio.wait_for(communicate, timeout=timeout)
                     if timeout
                     else await communicate
                 )
             except asyncio.TimeoutError:
                 await self._kill_process_tree(process)
-                output, _ = await process.communicate()
+                out, err = await process.communicate()
                 return {
-                    "output": output.decode(errors="replace"),
+                    "output": out.decode(errors="replace"),
+                    "stderr": err.decode(errors="replace"),
                     "exit_code": process.returncode,
                     "error": f"Command timed out after {timeout}s",
                 }
             return {
-                "output": output.decode(errors="replace"),
+                "output": out.decode(errors="replace"),
+                "stderr": err.decode(errors="replace"),
                 "exit_code": process.returncode,
             }
 
         session_id = f"proc_{uuid.uuid4().hex[:12]}"
         session = ProcessSession(session_id, command, process)
         self._sessions[session_id] = session
-        session.reader_task = asyncio.create_task(self._drain_output(session))
+        if process.stdout is not None:
+            session.reader_tasks.append(
+                asyncio.create_task(self._drain(session, process.stdout, session.output))
+            )
+        if process.stderr is not None:
+            session.reader_tasks.append(
+                asyncio.create_task(self._drain(session, process.stderr, session.stderr))
+            )
         return {
             "session_id": session_id,
             "pid": process.pid,
@@ -104,6 +123,7 @@ class MobileProcessRegistry:
         offset: int | None = None,
         limit: int = 200,
     ) -> dict[str, Any]:
+        self._prune_sessions()
         action = action.lower().strip()
         if action == "list":
             return {"sessions": [self._describe(session) for session in self._sessions.values()]}
@@ -116,9 +136,11 @@ class MobileProcessRegistry:
 
         if action == "poll":
             await asyncio.sleep(0)
-            chunk = bytes(session.output[session.poll_cursor :]).decode(errors="replace")
+            out = bytes(session.output[session.poll_cursor :]).decode(errors="replace")
             session.poll_cursor = len(session.output)
-            return {**self._describe(session), "output": chunk}
+            err = bytes(session.stderr[session.stderr_cursor :]).decode(errors="replace")
+            session.stderr_cursor = len(session.stderr)
+            return {**self._describe(session), "output": out, "stderr": err}
 
         if action == "log":
             lines = bytes(session.output).decode(errors="replace").splitlines()
@@ -137,20 +159,21 @@ class MobileProcessRegistry:
                     await asyncio.wait_for(waiter, timeout=timeout)
                 else:
                     await waiter
-                if session.reader_task:
-                    await session.reader_task
+                if session.reader_tasks:
+                    await asyncio.gather(*session.reader_tasks)
             except asyncio.TimeoutError:
                 return {**self._describe(session), "timeout": True}
             return {
                 **self._describe(session),
                 "output": bytes(session.output).decode(errors="replace"),
+                "stderr": bytes(session.stderr).decode(errors="replace"),
             }
 
         if action == "kill":
             if session.running:
                 await self._kill_process_tree(session.process)
-            if session.reader_task:
-                await session.reader_task
+            if session.reader_tasks:
+                await asyncio.gather(*session.reader_tasks)
             return {**self._describe(session), "killed": True}
 
         if action in {"write", "submit"}:
@@ -185,20 +208,52 @@ class MobileProcessRegistry:
             pass
         await process.wait()
 
-    async def _drain_output(self, session: ProcessSession) -> None:
-        stream = session.process.stdout
-        if stream is None:
-            return
+    async def _drain(
+        self,
+        session: ProcessSession,
+        stream: asyncio.StreamReader,
+        buffer: bytearray,
+    ) -> None:
+        """Copy *stream* into *buffer* until EOF, capping total bytes held."""
         while True:
             chunk = await stream.read(4096)
             if not chunk:
                 break
-            session.output.extend(chunk)
-            if len(session.output) > MAX_OUTPUT_BYTES:
-                overflow = len(session.output) - MAX_OUTPUT_BYTES
-                del session.output[:overflow]
-                session.poll_cursor = max(0, session.poll_cursor - overflow)
+            buffer.extend(chunk)
+            if len(buffer) > MAX_OUTPUT_BYTES:
+                del buffer[: len(buffer) - MAX_OUTPUT_BYTES]
         await session.process.wait()
+
+    def _prune_sessions(self) -> None:
+        """Evict finished sessions past retention, then oldest finished over cap."""
+        now = time.monotonic()
+        for sid, session in list(self._sessions.items()):
+            if session.process.returncode is not None and now - session.started_at > (
+                SESSION_RETENTION_SECONDS
+            ):
+                self._evict(sid)
+        if len(self._sessions) <= MAX_SESSIONS:
+            return
+        finished = sorted(
+            (
+                (sid, session)
+                for sid, session in self._sessions.items()
+                if session.process.returncode is not None
+            ),
+            key=lambda kv: kv[1].started_at,
+        )
+        for sid, _ in finished:
+            if len(self._sessions) <= MAX_SESSIONS:
+                break
+            self._evict(sid)
+
+    def _evict(self, session_id: str) -> None:
+        session = self._sessions.pop(session_id, None)
+        if session is None:
+            return
+        for task in session.reader_tasks:
+            if not task.done():
+                task.cancel()
 
     @staticmethod
     def _describe(session: ProcessSession) -> dict[str, Any]:

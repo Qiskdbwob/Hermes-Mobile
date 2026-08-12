@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -41,8 +42,10 @@ async def execute_code_tool(code: str, timeout: int = 60) -> Dict[str, Any]:
         script_path = f.name
 
     try:
+        # Use the running interpreter: on Android the app's bundled Python is
+        # reachable via sys.executable, while a bare "python3" is not on PATH.
         proc = await asyncio.create_subprocess_exec(
-            "python3",
+            sys.executable or "python3",
             script_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -82,17 +85,24 @@ async def search_files_tool(
     target: str = "content",
     file_glob: Optional[str] = None,
     limit: int = 50,
+    extra_dirs: Optional[List[Path]] = None,
+    base_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Search file contents (regex) or filenames (glob) under a directory."""
     if target == "files":
-        return _search_filenames(pattern, path, limit)
-    return _search_content(pattern, path, file_glob, limit)
+        return _search_filenames(pattern, path, limit, extra_dirs, base_dir)
+    return _search_content(pattern, path, file_glob, limit, extra_dirs, base_dir)
 
 
 def _search_content(
-    pattern: str, path: str, file_glob: Optional[str], limit: int
+    pattern: str,
+    path: str,
+    file_glob: Optional[str],
+    limit: int,
+    extra_dirs: Optional[List[Path]] = None,
+    base_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    base, error = validate_and_resolve_path(path)
+    base, error = validate_and_resolve_path(path, extra_dirs=extra_dirs, base_dir=base_dir)
     if error:
         return {"error": error}
     assert base is not None
@@ -137,8 +147,14 @@ def _search_content(
     return {"matches": matches, "count": len(matches)}
 
 
-def _search_filenames(pattern: str, path: str, limit: int) -> Dict[str, Any]:
-    base, error = validate_and_resolve_path(path)
+def _search_filenames(
+    pattern: str,
+    path: str,
+    limit: int,
+    extra_dirs: Optional[List[Path]] = None,
+    base_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    base, error = validate_and_resolve_path(path, extra_dirs=extra_dirs, base_dir=base_dir)
     if error:
         return {"error": error}
     assert base is not None
@@ -171,9 +187,11 @@ async def patch_tool(
     old_string: str,
     new_string: str = "",
     replace_all: bool = False,
+    extra_dirs: Optional[List[Path]] = None,
+    base_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Replace old_string with new_string in a file (like the desktop patch tool)."""
-    resolved, error = validate_and_resolve_path(path)
+    resolved, error = validate_and_resolve_path(path, extra_dirs=extra_dirs, base_dir=base_dir)
     if error:
         return {"error": error}
     if not resolved.exists():

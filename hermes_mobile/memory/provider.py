@@ -157,6 +157,17 @@ class MobileMemoryProvider:
             )
         """)
 
+        # Key/value memory table (backing the agent's memory tool store/retrieve)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS kv_memory (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                expires_at TEXT
+            )
+        """)
+
         # Create indexes
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_conversations_session ON conversations(session_id)"
@@ -435,6 +446,75 @@ class MobileMemoryProvider:
             f"[Memory {i + 1}] {content}" for i, (_, content) in enumerate(entries[:limit])
         ]
         return "\n\n".join(context_parts)
+
+    async def store_memory(self, key: str, value: str, ttl_days: Optional[int] = None) -> None:
+        """Store a key/value entry in long-term memory (upsert by key)."""
+        now = datetime.now().isoformat()
+        expires_at = None
+        if ttl_days:
+            expires_at = (datetime.now() + timedelta(days=ttl_days)).isoformat()
+        stored_value = self._encrypt(value) if self.encrypt else value
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO kv_memory (key, value, created_at, updated_at, expires_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at,
+                expires_at = excluded.expires_at
+            """,
+            (key, stored_value, now, now, expires_at),
+        )
+        conn.commit()
+
+    async def get_memory(self, key: str) -> Optional[str]:
+        """Return the value stored under *key*, or None if absent/expired."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT value, expires_at FROM kv_memory WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        expires_at = row["expires_at"]
+        if expires_at and expires_at <= datetime.now().isoformat():
+            return None
+        return self._decrypt(row["value"]) if self.encrypt else row["value"]
+
+    async def list_memory(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """List recent key/value memory entries, newest first."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT key, value, created_at, updated_at FROM kv_memory
+            WHERE expires_at IS NULL OR expires_at > ?
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (datetime.now().isoformat(), limit),
+        )
+        entries = []
+        for row in cursor.fetchall():
+            value = self._decrypt(row["value"]) if self.encrypt else row["value"]
+            entries.append(
+                {
+                    "key": row["key"],
+                    "value": value,
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                }
+            )
+        return entries
+
+    async def delete_memory(self, key: str) -> bool:
+        """Delete the entry stored under *key*. Returns True if it existed."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM kv_memory WHERE key = ?", (key,))
+        conn.commit()
+        return cursor.rowcount > 0
 
     async def search_memory(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Search memory entries"""

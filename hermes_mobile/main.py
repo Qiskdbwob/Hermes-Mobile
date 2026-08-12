@@ -85,6 +85,7 @@ class HermesMobileApp:
         self._resumed_session_id: str | None = None
         self._resumed_stored_id: str | None = None
         self.remote_secret_store: RemoteSecretStore | None = None
+        self.gateway_secret_store = None
         self.composer_state_store: ComposerStateStore | None = None
         self._remote_connect_lock = asyncio.Lock()
         self._remote_tool_calls: dict[str, ToolCall] = {}
@@ -259,10 +260,16 @@ class HermesMobileApp:
         self.plugin_registry = get_plugin_registry()
 
         # Initialize gateway manager
+        # Encrypted store for the Telegram bot token entered in the in-app
+        # Messaging view (no .env file needed on device).
+        from hermes_mobile.remote import GatewaySecretStore
+
+        self.gateway_secret_store = GatewaySecretStore(self.settings.get_data_dir())
+
         gateway_config = GatewayConfig(
             enabled=self.settings.gateway_enabled,
             port=self.settings.gateway_port,
-            platforms=[],
+            platforms=list(self.settings.gateway_platforms),
         )
         self.gateway_manager = GatewayManager(gateway_config)
 

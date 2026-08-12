@@ -9,6 +9,7 @@ under the app data dir.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import uuid
 from datetime import datetime
@@ -16,6 +17,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from hermes_mobile.config.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 COLUMNS = ["backlog", "in_progress", "done"]
 
@@ -41,8 +44,8 @@ def _load_board() -> Dict[str, Any]:
 def _save_board(board: Dict[str, Any]) -> None:
     try:
         _board_file().write_text(json.dumps(board, indent=2, ensure_ascii=False), encoding="utf-8")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to persist kanban board: %s", exc)
 
 
 def _task_dict(task: Dict[str, Any]) -> Dict[str, Any]:

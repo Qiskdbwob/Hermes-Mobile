@@ -104,6 +104,10 @@ Be concise but thorough. Use tools when appropriate."""
     # Gateway settings
     gateway_enabled: bool = False
     gateway_port: int = 8080
+    # Messaging platforms to start when the gateway runs ("telegram" is the
+    # only built-in adapter). Kept configurable so more adapters can be added
+    # without code changes.
+    gateway_platforms: list[str] = ["telegram"]
     push_notifications_enabled: bool = True
 
     # Runtime backend: local embedded agent or a Desktop-compatible Hermes
@@ -177,6 +181,7 @@ Be concise but thorough. Use tools when appropriate."""
         "cron_enabled",
         "gateway_enabled",
         "gateway_port",
+        "gateway_platforms",
         "push_notifications_enabled",
         "runtime_mode",
         "remote_url",

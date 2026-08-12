@@ -109,41 +109,56 @@ async def _quick_tool_call(
 async def delegate_task(
     task_description: str,
     context: Optional[str] = None,
+    agent: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Delegate a single task to a subagent.
 
     Args:
         task_description: What the subagent should do
         context: Optional context/background information
+        agent: Optional MobileAgent whose provider/model/API key should drive
+            the subagent, keeping delegation consistent with the active route.
 
     Returns dict with 'result' string and 'task' description.
     """
-    settings = get_settings()
-    provider = settings.default_provider
+    if agent is not None:
+        provider = agent.provider
+        model = agent.model
+        get_key = getattr(agent, "_get_api_key", None)
+        api_key = get_key() if callable(get_key) else ""
+    else:
+        settings = get_settings()
+        provider = settings.default_provider
+        model = settings.default_model
 
-    # Resolve provider URL and API key via provider profiles
+        # Try each env var the provider declares, then fall back to settings attrs
+        profile = get_provider_profile(provider)
+        api_key = None
+        if profile:
+            for var in profile.env_vars:
+                val = getattr(settings, var.lower(), None) or os.environ.get(var)
+                if val:
+                    api_key = val
+                    break
+        if not api_key:
+            key_map = {
+                "openai": settings.openai_api_key,
+                "openrouter": settings.openrouter_api_key,
+                "anthropic": settings.anthropic_api_key,
+                "gemini": settings.gemini_api_key,
+            }
+            api_key = key_map.get(provider)
+
+    # Resolve provider URL via provider profiles; reject non-OpenAI-compatible
+    # providers instead of posting to an endpoint that does not exist.
     profile = get_provider_profile(provider)
     provider_url = profile.base_url if profile else "https://openrouter.ai/api/v1"
-
-    # Try each env var the provider declares, then fall back to direct settings attrs
-    api_key = None
-    if profile:
-        for var in profile.env_vars:
-            val = getattr(settings, var.lower(), None) or os.environ.get(var)
-            if val:
-                api_key = val
-                break
-
-    if not api_key:
-        key_map = {
-            "openai": settings.openai_api_key,
-            "openrouter": settings.openrouter_api_key,
-            "anthropic": settings.anthropic_api_key,
-            "gemini": settings.gemini_api_key,
+    if profile is not None and profile.api_mode != "chat_completions":
+        return {
+            "task": task_description,
+            "result": f"Subagent error: provider '{provider}' requires the "
+            f"{profile.api_mode} API; use OpenRouter.",
         }
-        api_key = key_map.get(provider)
-
-    model = settings.default_model
 
     if not api_key:
         return {"task": task_description, "result": "No API key configured for subagent"}
@@ -189,6 +204,7 @@ async def delegate_task(
 async def delegate_parallel_tasks(
     tasks: List[str],
     context: Optional[str] = None,
+    agent: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Delegate multiple tasks to subagents, running them in parallel.
 
@@ -203,7 +219,7 @@ async def delegate_parallel_tasks(
 
     tasks = tasks[:MAX_CONCURRENT_SUBAGENTS]
 
-    coroutines = [delegate_task(task, context=context) for task in tasks]
+    coroutines = [delegate_task(task, context=context, agent=agent) for task in tasks]
     results = await asyncio.gather(*coroutines, return_exceptions=True)
 
     processed = []

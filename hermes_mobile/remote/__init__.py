@@ -13,7 +13,11 @@ from hermes_mobile.remote.client import (
     normalize_remote_base_url,
     redact_transport_error,
 )
-from hermes_mobile.remote.secrets import ProviderSecretStore, RemoteSecretStore
+from hermes_mobile.remote.secrets import (
+    GatewaySecretStore,
+    ProviderSecretStore,
+    RemoteSecretStore,
+)
 
 __all__ = [
     "RemoteAuthenticationError",
@@ -22,6 +26,7 @@ __all__ = [
     "RemoteHermesClient",
     "RemoteHermesError",
     "RemoteProtocolError",
+    "GatewaySecretStore",
     "ProviderSecretStore",
     "RemoteSecretStore",
     "RemoteStatus",

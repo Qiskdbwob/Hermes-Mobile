@@ -136,7 +136,7 @@ class ChatView:
             context_items = [
                 ft.PopupMenuItem(
                     icon=ft.Icons.ATTACH_FILE,
-                    content="Attach file",
+                    content=t("chat.attach_file"),
                     on_click=lambda e: asyncio.create_task(self._pick_attachments()),
                 ),
                 ft.PopupMenuItem(
@@ -146,7 +146,7 @@ class ChatView:
                 ),
                 ft.PopupMenuItem(
                     icon=ft.Icons.HUB_OUTLINED,
-                    content="Connections",
+                    content=t("chat.connections"),
                     on_click=lambda e: self.app._navigate_to("gateway"),
                 ),
             ]
@@ -158,22 +158,22 @@ class ChatView:
             context_items = [
                 ft.PopupMenuItem(
                     icon=ft.Icons.ATTACH_FILE,
-                    content="Attach file",
+                    content=t("chat.attach_file"),
                     on_click=lambda e: asyncio.create_task(self._pick_attachments()),
                 ),
                 ft.PopupMenuItem(
                     icon=ft.Icons.FOLDER_OPEN,
-                    content="Artifacts",
+                    content=t("nav.artifacts"),
                     on_click=lambda e: self.app._navigate_to("artifacts"),
                 ),
                 ft.PopupMenuItem(
                     icon=ft.Icons.PSYCHOLOGY_OUTLINED,
-                    content="Memory",
+                    content=t("nav.memory"),
                     on_click=lambda e: self.app._navigate_to("memory"),
                 ),
                 ft.PopupMenuItem(
                     icon=ft.Icons.BUILD_OUTLINED,
-                    content="Tools",
+                    content=t("nav.tools"),
                     on_click=lambda e: self.app._navigate_to("tools"),
                 ),
             ]
@@ -388,7 +388,7 @@ class ChatView:
             return
         payload = event.payload
         request_id = str(payload.get("request_id") or "")
-        title = "Hermes needs input"
+        title = t("chat.needs_input")
         content_controls: list[ft.Control] = []
         actions: list[ft.Control] = []
 
@@ -400,7 +400,7 @@ class ChatView:
                 snack(self.page, str(exc), error=True)
 
         if event.type == "approval.request":
-            title = "Approve remote command?"
+            title = t("chat.approve_remote_title")
             command = str(payload.get("command") or payload.get("description") or "")
             description = str(payload.get("description") or "")
             content_controls = [
@@ -422,13 +422,13 @@ class ChatView:
                 )
 
             actions = [
-                ft.TextButton("Deny", on_click=respond("deny")),
-                ft.TextButton("Allow once", on_click=respond("once")),
+                ft.TextButton(t("chat.deny"), on_click=respond("deny")),
+                ft.TextButton(t("chat.allow_once"), on_click=respond("once")),
             ]
             if payload.get("allow_permanent", payload.get("allowPermanent", True)):
-                actions.append(ft.TextButton("Always allow", on_click=respond("always")))
+                actions.append(ft.TextButton(t("chat.always_allow"), on_click=respond("always")))
         elif event.type == "clarify.request":
-            title = str(payload.get("question") or "Hermes needs clarification")
+            title = str(payload.get("question") or t("chat.needs_input"))
             choices = [str(item) for item in payload.get("choices") or []]
             multi_select = bool(payload.get("multi_select"))
             answer_field = ft.TextField(
@@ -460,9 +460,11 @@ class ChatView:
                 return answer_field.value or ""
 
             actions = [
-                ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
                 ft.TextButton(
-                    "Send",
+                    t("common.cancel"), on_click=lambda e: close_dialog(self.page, dialog)
+                ),
+                ft.TextButton(
+                    t("chat.send"),
                     on_click=lambda e: asyncio.create_task(
                         submit(client.respond_clarify(request_id, answer_value()), dialog)
                     ),
@@ -470,16 +472,20 @@ class ChatView:
             ]
         else:
             is_sudo = event.type == "sudo.request"
-            title = "Sudo password" if is_sudo else str(payload.get("prompt") or "Secret required")
+            title = (
+                t("chat.sudo_title")
+                if is_sudo
+                else str(payload.get("prompt") or t("chat.secret_title"))
+            )
             secret_field = ft.TextField(
-                hint_text="Password" if is_sudo else "Secret value",
+                hint_text=t("chat.sudo_hint") if is_sudo else t("chat.secret_hint"),
                 password=True,
                 can_reveal_password=True,
                 autofocus=True,
             )
             content_controls = [
                 ft.Text(
-                    "Sent only to the connected Hermes backend and never saved on this device.",
+                    t("chat.secret_note"),
                     size=12,
                     color=mode_colors(self.app.dark_mode)["muted_foreground"],
                 ),
@@ -494,9 +500,11 @@ class ChatView:
                 return client.respond_secret(request_id, value)
 
             actions = [
-                ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
                 ft.TextButton(
-                    "Send",
+                    t("common.cancel"), on_click=lambda e: close_dialog(self.page, dialog)
+                ),
+                ft.TextButton(
+                    t("chat.send"),
                     on_click=lambda e: asyncio.create_task(submit(send_secret(), dialog)),
                 ),
             ]
@@ -609,7 +617,7 @@ class ChatView:
 
     def _copy_to_clipboard(self, text: str) -> None:
         self.page.set_clipboard(text)
-        snack(self.page, "Copied")
+        snack(self.page, t("chat.copied"))
 
     def _attachment_storage_dir(self) -> Path:
         settings = getattr(self.app, "settings", None)
@@ -674,7 +682,7 @@ class ChatView:
                 with_data=True,
             )
         except Exception as exc:
-            snack(self.page, f"Attachment picker failed: {exc}", error=True)
+            snack(self.page, t("chat.picker_failed", error=str(exc)), error=True)
             return
         if not selected:
             return
@@ -683,7 +691,7 @@ class ChatView:
             if len(self.pending_attachments) >= MAX_ATTACHMENTS_PER_TURN:
                 snack(
                     self.page,
-                    f"Attachment limit is {MAX_ATTACHMENTS_PER_TURN} per turn",
+                    t("chat.attach_limit", max=MAX_ATTACHMENTS_PER_TURN),
                     error=True,
                 )
                 break
@@ -697,7 +705,7 @@ class ChatView:
                             pass
                     snack(
                         self.page,
-                        f"Remote attachments currently support text only: {attachment.name}",
+                        t("chat.remote_attachments_text_only", name=attachment.name),
                         error=True,
                     )
                     continue
@@ -705,10 +713,11 @@ class ChatView:
                 added += 1
             except Exception as exc:
                 name = getattr(file, "name", "attachment")
-                snack(self.page, f"Could not attach {name}: {exc}", error=True)
+                snack(self.page, t("chat.attach_failed", name=name, error=str(exc)), error=True)
         if added:
             self._refresh_attachments_row()
-            snack(self.page, f"Attached {added} file{'s' if added != 1 else ''}")
+            message = t("chat.attached_one") if added == 1 else t("chat.attached_many", count=added)
+            snack(self.page, message)
             self.page.update()
 
     def _consume_pending_attachments(self, text: str) -> str:
@@ -730,26 +739,22 @@ class ChatView:
         native/bridge task.
         """
         if bool(getattr(self.app, "remote_mode", False)):
-            snack(
-                self.page,
-                "Remote voice needs backend /api/audio/transcribe support; use text or attach a transcript for now.",
-                error=True,
-            )
+            snack(self.page, t("chat.audio_remote_unavailable"), error=True)
             return
         agent = getattr(self.app, "agent", None)
         if agent is None or not hasattr(agent, "transcribe_audio_file"):
-            snack(self.page, "Local audio transcription is not available", error=True)
+            snack(self.page, t("chat.audio_not_available"), error=True)
             return
         try:
             selected = await self.file_picker.pick_files(
-                dialog_title="Choose an audio file to transcribe",
+                dialog_title=t("chat.audio_picker_title"),
                 file_type=ft.FilePickerFileType.ANY,
                 allowed_extensions=["wav", "mp3", "m4a", "aac", "ogg", "oga", "webm", "flac"],
                 allow_multiple=False,
                 with_data=True,
             )
         except Exception as exc:
-            snack(self.page, f"Audio picker failed: {exc}", error=True)
+            snack(self.page, t("chat.audio_picker_failed", error=str(exc)), error=True)
             return
         if not selected:
             return
@@ -760,18 +765,18 @@ class ChatView:
                 attachment.mime_type.startswith("audio/")
                 or suffix in {"wav", "mp3", "m4a", "aac", "ogg", "oga", "webm", "flac"}
             ):
-                raise ValueError(f"Not an audio file: {attachment.name}")
+                raise ValueError(t("chat.audio_invalid", name=attachment.name))
             if not attachment.local_path:
-                raise ValueError(f"Audio file could not be staged: {attachment.name}")
-            snack(self.page, "Transcribing audio…")
+                raise ValueError(t("chat.audio_stage_failed", name=attachment.name))
+            snack(self.page, t("chat.audio_transcribing"))
             transcript = await agent.transcribe_audio_file(Path(attachment.local_path))
         except Exception as exc:
-            snack(self.page, f"Audio transcription failed: {exc}", error=True)
+            snack(self.page, t("chat.audio_transcribe_failed", error=str(exc)), error=True)
             return
         existing = str(self.input_field.value or "").strip()
         self.input_field.value = f"{existing}\n{transcript}".strip() if existing else transcript
         self._on_draft_change(None)
-        snack(self.page, "Audio transcribed into composer")
+        snack(self.page, t("chat.audio_transcribed"))
         self.page.update()
 
     def _render_messages(self) -> None:

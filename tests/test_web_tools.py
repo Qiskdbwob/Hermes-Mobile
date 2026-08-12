@@ -2,6 +2,8 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from hermes_mobile.tools.web_tools import (
     MAX_EXTRACT_CHARS,
     _clean_html,
@@ -83,6 +85,28 @@ def _make_http_response(status_code=200, text=SAMPLE_HTML, url="https://example.
     request = Request("GET", url)
     resp = Response(status_code=status_code, text=text, request=request)
     return resp
+
+
+@pytest.fixture(autouse=True)
+async def _reset_browser_session():
+    """Reset the module-level BrowserSession singleton between tests."""
+    from hermes_mobile.tools.browser_session import _session
+
+    _session._history.clear()
+    _session._current_url = None
+    _session._client = None
+    yield
+    _session._history.clear()
+    _session._current_url = None
+    _session._client = None
+
+
+def _patch_browser_client():
+    """Patch the browser session's httpx client (constructed directly)."""
+    patcher = patch("hermes_mobile.tools.browser_session.httpx.AsyncClient")
+    mock_cls = patcher.start()
+    mock_client = mock_cls.return_value
+    return patcher, mock_cls, mock_client
 
 
 class TestCleanHtml:
@@ -281,14 +305,16 @@ class TestWebExtractTool:
 
 
 class TestBrowserNavigateTool:
+    """browser_navigate_tool delegates to the stateful BrowserSession, which
+    performs the SSRF-guarded fetch through the shared _safe_get helper."""
+
     async def test_empty_url(self):
         result = await browser_navigate_tool(url="")
         assert "error" in result
 
     async def test_successful_navigate(self):
-        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
-            mock_client = MagicMock()
-            mock_cls.return_value.__aenter__.return_value = mock_client
+        patcher, _, mock_client = _patch_browser_client()
+        try:
             mock_client.get = AsyncMock(
                 return_value=_make_http_response(text=SAMPLE_HTML, url="https://example.com")
             )
@@ -297,52 +323,57 @@ class TestBrowserNavigateTool:
             assert result["url"] == "https://example.com"
             assert "Hello World" in result["content"]
             assert result["title"] == "Test Page"
+        finally:
+            patcher.stop()
 
     async def test_auto_adds_https(self):
-        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
-            mock_client = MagicMock()
-            mock_cls.return_value.__aenter__.return_value = mock_client
+        patcher, _, mock_client = _patch_browser_client()
+        try:
             mock_client.get = AsyncMock(return_value=_make_http_response())
 
             await browser_navigate_tool(url="example.com")
             # Should have added https://
             call_args = mock_client.get.call_args
             assert call_args[0][0].startswith("https://")
+        finally:
+            patcher.stop()
 
     async def test_navigate_http_error(self):
-        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
-            mock_client = MagicMock()
-            mock_cls.return_value.__aenter__.return_value = mock_client
+        patcher, _, mock_client = _patch_browser_client()
+        try:
             mock_client.get = AsyncMock(return_value=_make_http_response(status_code=500))
 
             result = await browser_navigate_tool(url="https://example.com/error")
             assert "error" in result
+        finally:
+            patcher.stop()
 
     async def test_navigate_timeout(self):
-        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
-            mock_client = MagicMock()
-            mock_cls.return_value.__aenter__.return_value = mock_client
+        patcher, _, mock_client = _patch_browser_client()
+        try:
             from httpx import TimeoutException
 
             mock_client.get = AsyncMock(side_effect=TimeoutException("Timed out"))
 
             result = await browser_navigate_tool(url="https://example.com")
             assert "timed out" in result.get("error", "").lower()
+        finally:
+            patcher.stop()
 
     async def test_navigate_generic_exception(self):
-        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
-            mock_client = MagicMock()
-            mock_cls.return_value.__aenter__.return_value = mock_client
+        patcher, _, mock_client = _patch_browser_client()
+        try:
             mock_client.get = AsyncMock(side_effect=ConnectionRefusedError("Connection refused"))
 
             result = await browser_navigate_tool(url="https://example.com")
             assert "error" in result
+        finally:
+            patcher.stop()
 
     async def test_navigate_filters_links(self):
         """Anchor-only and javascript: links should be excluded."""
-        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
-            mock_client = MagicMock()
-            mock_cls.return_value.__aenter__.return_value = mock_client
+        patcher, _, mock_client = _patch_browser_client()
+        try:
             mock_client.get = AsyncMock(
                 return_value=_make_http_response(
                     text=SAMPLE_HTML_WITH_LINKS,
@@ -356,6 +387,8 @@ class TestBrowserNavigateTool:
             assert "/valid" in hrefs
             assert "#section" not in hrefs
             assert "javascript:" not in hrefs
+        finally:
+            patcher.stop()
 
 
 class TestBrowserSnapshotTool:
@@ -427,10 +460,13 @@ class TestSsrFProtection:
         assert err is not None and "Blocked private" in err
 
     async def test_navigate_blocks_private_host_before_fetch(self):
-        with patch("hermes_mobile.tools.web_tools.httpx.AsyncClient") as mock_cls:
+        patcher, mock_cls, _ = _patch_browser_client()
+        try:
             result = await browser_navigate_tool("http://127.0.0.1/admin")
             assert "error" in result and "Blocked private" in result["error"]
-            mock_cls.return_value.__aenter__.return_value.get.assert_not_called()
+            mock_cls.return_value.get.assert_not_called()
+        finally:
+            patcher.stop()
 
     async def test_redirect_to_private_is_blocked(self):
         from hermes_mobile.tools.web_tools import _safe_get

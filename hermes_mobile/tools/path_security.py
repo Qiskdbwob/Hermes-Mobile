@@ -63,14 +63,27 @@ def get_allowed_directories() -> list[Path]:
     return [d for d in allowed if d.exists()]
 
 
-def validate_and_resolve_path(raw_path: str) -> tuple[Optional[Path], Optional[str]]:
+def validate_and_resolve_path(
+    raw_path: str,
+    extra_dirs: Optional[list[Path]] = None,
+    base_dir: Optional[Path] = None,
+) -> tuple[Optional[Path], Optional[str]]:
     """Validate and resolve a user-provided path.
+
+    Args:
+        raw_path: User-provided path (absolute or relative).
+        extra_dirs: Additional allowed roots (e.g. the active project workspace).
+        base_dir: When *raw_path* is relative, resolve it against this directory
+            first (e.g. the active workspace), so "note.txt" means
+            ``<workspace>/note.txt``.
 
     Returns (resolved_path, error_message). One will always be None.
     """
     path = Path(raw_path).expanduser()
+    if base_dir is not None and not path.is_absolute():
+        path = base_dir / path
 
-    if has_traversal_component(raw_path):
+    if has_traversal_component(str(path)):
         return None, "Path traversal detected: '..' components are not allowed"
 
     try:
@@ -79,6 +92,8 @@ def validate_and_resolve_path(raw_path: str) -> tuple[Optional[Path], Optional[s
         return None, f"Cannot resolve path: {exc}"
 
     allowed = get_allowed_directories()
+    if extra_dirs:
+        allowed = list(allowed) + [d for d in extra_dirs if d is not None]
     for root in allowed:
         if validate_within_dir(resolved, root) is None:
             return resolved, None

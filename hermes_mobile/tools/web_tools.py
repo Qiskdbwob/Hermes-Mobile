@@ -279,64 +279,16 @@ async def web_extract_tool(
 
 
 async def browser_navigate_tool(url: str) -> Dict[str, Any]:
-    """Navigate to a URL and return page content."""
-    if not url or not url.strip():
-        return {"error": "URL is required"}
+    """Navigate to a URL and return page content (stateful session).
 
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
+    Delegates to the shared BrowserSession so navigation history, link
+    clicking and image listing stay consistent with this call (back/click/
+    get_images operate on the same tab). SSRF validation applies to every
+    hop inside the session.
+    """
+    from hermes_mobile.tools.browser_session import _session
 
-    try:
-        async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT) as client:
-            response, error = await _safe_get(client, url)
-            if error:
-                return {"url": url, "error": error}
-            if response is None:
-                return {"url": url, "error": "No response"}
-
-            if response.status_code != 200:
-                return {
-                    "url": str(response.url),
-                    "title": "",
-                    "status_code": response.status_code,
-                    "content": "",
-                    "error": f"HTTP {response.status_code}",
-                }
-
-            soup = BeautifulSoup(response.text, "lxml")
-
-            title = soup.title.get_text(strip=True) if soup.title else ""
-
-            for tag in soup(["script", "style", "nav", "footer", "header"]):
-                tag.decompose()
-
-            text = soup.get_text(separator="\n", strip=True)
-            text = "\n".join(line for line in text.split("\n") if line.strip())
-
-            links = []
-            for a in soup.find_all("a", href=True):
-                href = a.get("href", "")
-                if href and not href.startswith(("#", "javascript:")):
-                    links.append(
-                        {
-                            "text": a.get_text(strip=True)[:80],
-                            "href": href[:200],
-                        }
-                    )
-
-            return {
-                "url": str(response.url),
-                "title": title,
-                "status_code": response.status_code,
-                "content": text[:8000],
-                "links": links[:20],
-                "content_length": len(text),
-            }
-
-    except httpx.TimeoutException:
-        return {"url": url, "error": "Request timed out"}
-    except Exception as e:
-        return {"url": url, "error": str(e)}
+    return await _session.navigate(url)
 
 
 async def browser_snapshot_tool(url: str) -> Dict[str, Any]:

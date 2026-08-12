@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from bs4 import BeautifulSoup
 
-from hermes_mobile.tools.web_tools import USER_AGENT
+from hermes_mobile.tools.web_tools import USER_AGENT, _safe_get
 
 logger = logging.getLogger(__name__)
 
@@ -34,28 +34,30 @@ class BrowserSession:
             self._client = httpx.AsyncClient(
                 timeout=TIMEOUT,
                 headers={"User-Agent": USER_AGENT},
-                follow_redirects=True,
             )
         return self._client
 
     async def navigate(self, url: str) -> Dict[str, Any]:
-        """Navigate to a URL, recording history, and return a page snapshot."""
+        """Navigate to a URL, recording history, and return a page snapshot.
+
+        Every hop is validated by the shared SSRF guard (no loopback/private
+        hosts, redirects checked one at a time).
+        """
         if not url or not url.strip():
             return {"error": "URL is required"}
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
 
         client = await self._get_client()
-        try:
-            response = await client.get(url)
-            if self._current_url:
-                self._history.append(self._current_url)
-            self._current_url = str(response.url)
-            return self._snapshot(response)
-        except httpx.TimeoutException:
-            return {"url": url, "error": "Request timed out"}
-        except Exception as e:
-            return {"url": url, "error": str(e)}
+        response, error = await _safe_get(client, url)
+        if error:
+            return {"url": url, "error": error}
+        if response is None:
+            return {"url": url, "error": "No response"}
+        if self._current_url:
+            self._history.append(self._current_url)
+        self._current_url = str(response.url)
+        return self._snapshot(response)
 
     async def back(self) -> Dict[str, Any]:
         """Navigate to the previous page in history."""
@@ -63,12 +65,15 @@ class BrowserSession:
             return {"error": "No history to go back to"}
         url = self._history.pop()
         client = await self._get_client()
-        try:
-            response = await client.get(url)
-            self._current_url = str(response.url)
-            return self._snapshot(response)
-        except Exception as e:
-            return {"url": url, "error": str(e)}
+        response, error = await _safe_get(client, url)
+        if error:
+            self._history.append(url)  # keep it retryable on transient failure
+            return {"url": url, "error": error}
+        if response is None:
+            self._history.append(url)
+            return {"url": url, "error": "No response"}
+        self._current_url = str(response.url)
+        return self._snapshot(response)
 
     async def click_link(self, href: str) -> Dict[str, Any]:
         """Click a link by href (resolves relative to the current page)."""
@@ -85,8 +90,12 @@ class BrowserSession:
         if not self._current_url:
             return {"error": "No page loaded"}
         client = await self._get_client()
+        response, error = await _safe_get(client, self._current_url)
+        if error:
+            return {"url": self._current_url, "error": error}
+        if response is None:
+            return {"url": self._current_url, "error": "No response"}
         try:
-            response = await client.get(self._current_url)
             soup = BeautifulSoup(response.text, "lxml")
             images = []
             for img in soup.find_all("img"):
