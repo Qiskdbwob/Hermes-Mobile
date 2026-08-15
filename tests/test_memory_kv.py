@@ -45,6 +45,25 @@ class TestKvMemory:
         keys = [e["key"] for e in await memory_provider.list_memory()]
         assert "stale" not in keys
 
+    async def test_cleanup_expired_physically_prunes_kv(self, memory_provider):
+        """Regression: expired kv_memory rows were never deleted, so TTL'd
+        entries leaked forever and the DB grew unbounded."""
+        await memory_provider.store_memory("stale-1", "old", ttl_days=-1)
+        await memory_provider.store_memory("stale-2", "old", ttl_days=-1)
+        await memory_provider.store_memory("fresh", "new", ttl_days=30)
+
+        conn = memory_provider._get_conn()
+
+        def physical_count() -> int:
+            return conn.execute("SELECT COUNT(*) AS c FROM kv_memory").fetchone()["c"]
+
+        assert physical_count() == 3
+        await memory_provider.cleanup_expired()
+        assert physical_count() == 1
+        keys = [entry["key"] for entry in await memory_provider.list_memory()]
+        assert keys == ["fresh"]
+        assert await memory_provider.get_memory("stale-1") is None
+
     async def test_encrypted_roundtrip(self, temp_dir):
         provider = MobileMemoryProvider(
             db_path=temp_dir / "enc_kv.db",

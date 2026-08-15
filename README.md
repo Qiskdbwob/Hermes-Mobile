@@ -134,16 +134,18 @@ hermes_mobile/
 |---|---|---|
 | **OpenRouter** | `OPENROUTER_API_KEY` | [openrouter.ai/keys](https://openrouter.ai/keys) |
 | **OpenAI** | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com) |
-| **Google AI** | `GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com) |
+| **Google AI** | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | [aistudio.google.com](https://aistudio.google.com) |
 | **Groq** | `GROQ_API_KEY` | [console.groq.com](https://console.groq.com) |
 | **Together AI** | `TOGETHER_API_KEY` | [together.ai](https://together.ai) |
 | **DeepSeek** | `DEEPSEEK_API_KEY` | [platform.deepseek.com](https://platform.deepseek.com) |
 | **xAI** | `XAI_API_KEY` | [x.ai](https://x.ai) |
+| **Ollama (Local)** | none — set `OLLAMA_HOST` or edit the endpoint in Settings | [ollama.com](https://ollama.com) |
+| **Anthropic** (remote only) | `ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com) |
 
-Anthropic (native Messages API) and Ollama (local models) profiles exist in the
-codebase but are currently gated — Anthropic needs a second HTTP client path, and
-Ollama's `localhost` assumption doesn't hold on stock Android. Both are on the
-roadmap.
+Ollama is fully local and keyless — the endpoint defaults to
+`http://localhost:11434/v1` and is editable in Settings (or via `OLLAMA_HOST`),
+so LAN Ollama servers work on Android. Anthropic uses the native Messages API;
+that client path is remote-only for now and is not offered in the local agent.
 
 ---
 

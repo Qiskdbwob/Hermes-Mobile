@@ -802,6 +802,12 @@ class MobileMemoryProvider:
         cursor.execute(
             "DELETE FROM memory_items WHERE expires_at IS NOT NULL AND expires_at < ?", (now,)
         )
+        # The kv_memory table backs the agent's memory tool; reads already hide
+        # expired rows, but the rows themselves were never physically pruned,
+        # so TTL'd entries leaked forever and the DB grew unbounded.
+        cursor.execute(
+            "DELETE FROM kv_memory WHERE expires_at IS NOT NULL AND expires_at < ?", (now,)
+        )
 
         conn.commit()
 
