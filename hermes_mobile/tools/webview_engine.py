@@ -23,10 +23,16 @@ logger = logging.getLogger(__name__)
 _WEBVIEW_PLATFORMS = {"android", "ios", "macos", "web"}
 
 
+def _import_webview() -> Any:
+    """Import flet_webview (isolated so tests can patch it)."""
+    import flet_webview  # noqa: F401
+
+    return flet_webview
+
+
 def _webview_import_available() -> bool:
     try:
-        import flet_webview  # noqa: F401
-
+        _import_webview()
         return True
     except Exception:
         return False
@@ -64,9 +70,16 @@ class WebViewEngine:
         return self._last_error
 
     def build_control(self, url: str = "about:blank") -> Any:
-        """Create the WebView control (imports flet_webview lazily)."""
-        import flet_webview as fwv
+        """Create the WebView control (imports flet_webview lazily).
 
+        Returns None when flet-webview is not installed (e.g. the Python 3.9
+        CI line); callers must fall back to the static browser engine.
+        """
+        try:
+            fwv = _import_webview()
+        except Exception:
+            self._last_error = "flet-webview is not installed"
+            return None
         self._control = fwv.WebView(
             url=url,
             expand=True,
@@ -85,9 +98,15 @@ class WebViewEngine:
         self._last_error = str(data or "web resource error")
 
     def mount(self, container: Any) -> None:
-        """Mount the WebView control inside a container."""
+        """Mount the WebView control inside a container.
+
+        No-op (control stays unmounted) when flet-webview is unavailable, so
+        callers can safely fall back to the static browser engine.
+        """
         if self._control is None:
             self.build_control()
+        if self._control is None:
+            return
         self._container = container
         container.content = self._control
         try:

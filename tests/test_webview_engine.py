@@ -1,5 +1,6 @@
 """Tests for the WebView automation engine (flet-webview wrapper)."""
 
+import sys
 from types import SimpleNamespace
 
 import flet as ft
@@ -149,8 +150,22 @@ class TestInteraction:
         assert await engine.back() is False
 
 
+class FakeWebView:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+
+class FakeWebViewModule:
+    WebView = FakeWebView
+
+
+def _raise_import_error():
+    raise ImportError("flet-webview not installed")
+
+
 class TestMount:
-    def test_mount_attaches_control(self):
+    def test_mount_attaches_control(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "flet_webview", FakeWebViewModule())
         page = FakePage()
         eng = WebViewEngine(page)
         container = FakeContainer()
@@ -159,10 +174,21 @@ class TestMount:
         assert container.content is eng._control
         assert page.updates >= 1
 
-    def test_dismount_detaches(self):
+    def test_dismount_detaches(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "flet_webview", FakeWebViewModule())
         eng = WebViewEngine(FakePage())
         container = FakeContainer()
         eng.mount(container)
         eng.dismount()
         assert eng.is_mounted is False
         assert container.content is None
+
+    def test_mount_graceful_when_package_missing(self, monkeypatch):
+        monkeypatch.setattr(wv, "_import_webview", _raise_import_error)
+        monkeypatch.setattr(wv, "_webview_import_available", lambda: False)
+        eng = WebViewEngine(FakePage())
+        container = FakeContainer()
+        eng.mount(container)
+        assert eng.is_mounted is False
+        assert container.content is None
+        assert "not installed" in (eng.last_error or "")
