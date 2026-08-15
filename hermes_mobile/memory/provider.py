@@ -241,6 +241,25 @@ class MobileMemoryProvider:
                 updated_at TEXT NOT NULL
             )
         """)
+        # Plaintext keyword index for cross-session search. Tokens are
+        # stopword-filtered (non-sensitive, see memory/summarizer.py), so the
+        # index can be queried with SQL without decrypting conversation
+        # content — the same trade-off as normalized_hash on memory_items.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_keywords (
+                session_id TEXT NOT NULL,
+                keyword TEXT NOT NULL,
+                weight INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (session_id, keyword)
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_session_keywords_keyword ON session_keywords(keyword)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_session_keywords_session ON session_keywords(session_id)"
+        )
 
         # Create indexes
         cursor.execute(
@@ -643,14 +662,78 @@ class MobileMemoryProvider:
         results.sort(key=lambda x: x["score"], reverse=True)
         return results[:limit]
 
+    async def index_session_keywords(self, session_id: str, keywords: List[str]) -> None:
+        """(Re)build the plaintext keyword index for a session.
+
+        Keywords come from the extractive/LLM summary plus user messages (see
+        memory/summarizer.extract_keywords): stopword-filtered tokens only, so
+        the index carries no sensitive plaintext. Replace-per-session keeps the
+        index in sync with the latest summary.
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        cursor.execute("DELETE FROM session_keywords WHERE session_id = ?", (session_id,))
+        seen: Dict[str, int] = {}
+        for kw in keywords or []:
+            kw = str(kw).strip().lower()
+            if not kw or len(kw) < 3:
+                continue
+            seen[kw] = seen.get(kw, 0) + 1
+        cursor.executemany(
+            "INSERT OR REPLACE INTO session_keywords (session_id, keyword, weight, updated_at) "
+            "VALUES (?, ?, ?, ?)",
+            [(session_id, kw, weight, now) for kw, weight in seen.items()],
+        )
+        conn.commit()
+
+    async def find_unfinalized_session(
+        self, exclude_session_id: Optional[str] = None
+    ) -> Optional[str]:
+        """Most recent session that has messages but no stored summary yet.
+
+        Used for deferred finalization: when the app is killed before
+        ``clear_conversation`` runs, the previous session never gets its LLM
+        summary — the next agent turn finalizes it instead.
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        params: List[Any] = []
+        exclude_sql = ""
+        if exclude_session_id:
+            exclude_sql = "AND c.session_id != ?"
+            params.append(exclude_session_id)
+        cursor.execute(
+            f"""
+            SELECT c.session_id
+            FROM conversations c
+            WHERE NOT EXISTS (
+                SELECT 1 FROM session_summaries s WHERE s.session_id = c.session_id
+            )
+            {exclude_sql}
+            GROUP BY c.session_id
+            ORDER BY MAX(c.timestamp) DESC
+            LIMIT 1
+            """,
+            params,
+        )
+        row = cursor.fetchone()
+        return row["session_id"] if row else None
+
     async def search_sessions(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Search conversation sessions by content.
 
-        Uses SQL LIKE for plaintext. For encrypted data it decrypts a bounded
-        window of recent messages per candidate session (bounded-decrypt, see
-        docs/memory-harness-v2-gap.md) so matches buried earlier in a session
-        are still found without decrypting the whole database, then ranks the
-        matching sessions by keyword-hit count.
+        Two-stage retrieval:
+
+        1. The plaintext ``session_keywords`` index picks candidate sessions
+           cheaply across ALL indexed sessions (no decrypt), ranked by keyword
+           weight.
+        2. For each candidate, a bounded decrypt window (encrypted mode) or
+           SQL LIKE (plaintext mode) confirms hits and produces the best-
+           matching snippet; the stored summary is attached when available.
+
+        Legacy sessions without an index entry still get a recent-session scan
+        so nothing regresses for pre-upgrade data.
         """
         conn = self._get_conn()
         cursor = conn.cursor()
@@ -658,15 +741,42 @@ class MobileMemoryProvider:
         if not keywords:
             return []
 
-        if self.encrypt:
+        candidates: List[Dict[str, Any]] = []  # {sid, score}
+        indexed = set()
+        if keywords:
+            placeholders = ",".join("?" for _ in keywords)
+            cursor.execute(
+                f"SELECT session_id, SUM(weight) AS score FROM session_keywords "
+                f"WHERE keyword IN ({placeholders}) "
+                f"GROUP BY session_id ORDER BY score DESC LIMIT ?",
+                (*keywords, limit * 5),
+            )
+            for row in cursor.fetchall():
+                candidates.append({"sid": row["session_id"], "score": int(row["score"])})
+                indexed.add(row["session_id"])
+
+        # Legacy fallback: recent sessions without an index entry are still
+        # scanned so pre-upgrade conversations remain searchable.
+        if len(candidates) < limit:
             cursor.execute(
                 "SELECT session_id, MAX(timestamp) AS last_at FROM conversations "
                 "GROUP BY session_id ORDER BY last_at DESC LIMIT ?",
-                (limit * 10,),
+                ((limit * 10),),
             )
-            results = []
-            for sid_row in cursor.fetchall():
-                sid = sid_row["session_id"]
+            for row in cursor.fetchall():
+                if row["session_id"] not in indexed:
+                    candidates.append({"sid": row["session_id"], "score": 0})
+
+        results = []
+        for cand in candidates[: limit * 5]:
+            sid = cand["sid"]
+            title = "Untitled"
+            last_at = ""
+            best_content = ""
+            best_hits = 0
+            content_hits = 0
+
+            if self.encrypt:
                 cursor.execute(
                     "SELECT content, timestamp FROM conversations WHERE session_id = ? "
                     "ORDER BY timestamp DESC LIMIT ?",
@@ -675,57 +785,59 @@ class MobileMemoryProvider:
                 rows = cursor.fetchall()
                 if not rows:
                     continue
-                hits = 0
-                title = "Untitled"
-                preview = ""
                 last_at = rows[0]["timestamp"]
                 for row in rows:
                     content = self._decrypt(row["content"])
-                    if not preview:
-                        preview = content
-                        title = content[:80] if content else "Untitled"
-                    hits += sum(1 for kw in keywords if kw in content.lower())
-                if hits:
-                    results.append(
-                        {
-                            "id": sid,
-                            "title": title,
-                            "preview": preview,
-                            "timestamp": last_at,
-                            "score": hits,
-                        }
-                    )
-            results.sort(key=lambda r: r["score"], reverse=True)
-            return results[:limit]
+                    if not content:
+                        continue
+                    if title == "Untitled":
+                        title = content[:80]
+                    row_hits = sum(1 for kw in keywords if kw in content.lower())
+                    content_hits += row_hits
+                    if row_hits > best_hits:
+                        best_hits = row_hits
+                        best_content = content
+            else:
+                like_conditions = " OR ".join("LOWER(content) LIKE ?" for _ in keywords)
+                params = [f"%{kw}%" for kw in keywords]
+                cursor.execute(
+                    f"SELECT content, timestamp FROM conversations WHERE session_id = ? "
+                    f"AND ({like_conditions}) ORDER BY timestamp DESC LIMIT ?",
+                    (sid, *params, _SEARCH_WINDOW),
+                )
+                rows = cursor.fetchall()
+                last_at = rows[0]["timestamp"] if rows else ""
+                for row in rows:
+                    content = row["content"]
+                    if not content:
+                        continue
+                    if title == "Untitled":
+                        title = content[:80]
+                    row_hits = sum(1 for kw in keywords if kw in content.lower())
+                    content_hits += row_hits
+                    if row_hits > best_hits:
+                        best_hits = row_hits
+                        best_content = content
 
-        like_conditions = " OR ".join("LOWER(c.content) LIKE ?" for _ in keywords)
-        params = [f"%{kw}%" for kw in keywords]
-
-        cursor.execute(
-            f"""
-            SELECT c.session_id, c.content, c.timestamp
-            FROM conversations c
-            WHERE {like_conditions}
-            ORDER BY c.timestamp DESC
-            LIMIT ?
-            """,
-            (*params, limit * 5),
-        )
-
-        seen = {}
-        for row in cursor.fetchall():
-            sid = row["session_id"]
-            if sid in seen:
+            # The index may hit keywords outside the bounded window; the stored
+            # summary confirms the match. Keep the candidate either way.
+            score = max(cand["score"], content_hits)
+            if score <= 0:
                 continue
-            content = row["content"]
-            seen[sid] = {
-                "id": sid,
-                "title": content[:80] if content else "Untitled",
-                "preview": content,
-                "timestamp": row["timestamp"],
-            }
+            summary = (await self.get_session_summary(sid)) or ""
+            results.append(
+                {
+                    "id": sid,
+                    "title": title,
+                    "preview": best_content[:200] or summary[:200] or title[:200],
+                    "timestamp": last_at,
+                    "score": score,
+                    "summary": summary,
+                }
+            )
 
-        return list(seen.values())[:limit]
+        results.sort(key=lambda r: (r["score"], r["timestamp"] or ""), reverse=True)
+        return results[:limit]
 
     async def set_skill_memory(
         self, skill_name: str, key: str, value: Any, ttl_days: Optional[int] = None

@@ -295,8 +295,16 @@ def create_job(
     working_dir: Optional[str] = None,
     description: str = "",
     tags: Optional[List[str]] = None,
+    run_at: Optional[str] = None,
 ) -> CronJob:
-    """Create a new cron job."""
+    """Create a new cron job.
+
+    ``run_at`` (ISO 8601 timestamp) is only meaningful for ``schedule="oneshot"``:
+    it delays the single execution until that time. A oneshot without ``run_at``
+    runs on the next tick. Invalid timestamps raise ``ValueError`` so callers
+    (UI, model tool) can surface a helpful error instead of silently creating a
+    job that never fires.
+    """
     job = CronJob(
         id=str(uuid.uuid4())[:8],
         name=name,
@@ -310,6 +318,10 @@ def create_job(
         tags=tags or [],
     )
     job.next_run = _compute_next_run(schedule)
+    if schedule == "oneshot" and run_at:
+        # Validate eagerly so a bad timestamp never produces a silent no-op job.
+        datetime.fromisoformat(run_at)
+        job.next_run = run_at
 
     with _jobs_lock():
         jobs = _load_jobs()
@@ -641,8 +653,15 @@ def _tick():
             continue
 
         if job.schedule == "oneshot":
-            # Oneshot jobs run once when created
+            # Oneshot jobs run exactly once: immediately when created (no
+            # run_at) or at the scheduled run_at time when one was provided.
             if job.last_run is None:
+                if job.next_run:
+                    try:
+                        if datetime.fromisoformat(job.next_run) > now:
+                            continue
+                    except ValueError:
+                        continue  # corrupt timestamp: never fire
                 _dispatch_job(job)
             continue
 

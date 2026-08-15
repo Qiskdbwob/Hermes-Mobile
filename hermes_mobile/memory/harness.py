@@ -270,6 +270,75 @@ class MemoryHarness:
                 logger.warning("Memory harness failed for candidate: %s", exc)
         return result
 
+    async def add_candidates(
+        self,
+        session_id: str,
+        texts: List[str],
+        source_type: str = "session_summary",
+    ) -> Dict[str, int]:
+        """Apply the memory policy to pre-extracted candidate texts.
+
+        Used at session finalization: the LLM session summary may surface stable
+        facts and preferences that never used an explicit "remember" marker.
+        Candidates are classified (stable_fact vs user_profile), deduplicated,
+        and passed through the same AUTO_SAVE / ASK / IGNORE policy as normal
+        turns. Never raises; never blocks the finalization pipeline.
+        """
+        result = {
+            "auto_saved": 0,
+            "asked": 0,
+            "approved": 0,
+            "pending": 0,
+            "ignored": 0,
+            "duplicates": 0,
+        }
+        if self.provider is None:
+            return result
+        for text in texts or []:
+            text = str(text).strip()
+            if not text:
+                continue
+            try:
+                candidate = MemoryCandidate(
+                    content=text,
+                    session_id=session_id,
+                    memory_type=_classify(text),
+                    scope_type="user"
+                    if any(h in text.lower() for h in _PROFILE_HINTS)
+                    else "global",
+                    confidence=0.9,
+                    importance=0.7,
+                    sensitivity=0.0,
+                    source_type=source_type,
+                    evidence_type="session_summary",
+                    evidence_text="Extracted from the LLM session summary",
+                    explicit=True,
+                )
+                duplicate = await self.provider.find_duplicate_memory(
+                    candidate.content, candidate.scope_type, candidate.scope_id
+                )
+                if duplicate is not None:
+                    result["duplicates"] += 1
+                    continue
+                decision = self.policy.evaluate(candidate, None)
+                if decision == "AUTO_SAVE":
+                    await self._persist(candidate, source_type=source_type)
+                    result["auto_saved"] += 1
+                elif decision == "ASK":
+                    result["asked"] += 1
+                    answer = await self._ask(candidate)
+                    if answer is True:
+                        await self._persist(candidate, source_type="user_confirmation")
+                        result["approved"] += 1
+                    elif answer is None:
+                        await self._persist_pending(candidate)
+                        result["pending"] += 1
+                else:
+                    result["ignored"] += 1
+            except Exception as exc:
+                logger.warning("Memory harness failed for summary candidate: %s", exc)
+        return result
+
     async def _ask(self, candidate: MemoryCandidate) -> Optional[bool]:
         """Bounded confirmation.
 

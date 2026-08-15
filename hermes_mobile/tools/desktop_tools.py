@@ -337,11 +337,46 @@ async def skill_manage_tool(
 # ---------------------------------------------------------------------------
 
 
-async def cronjob_tool(action: str, job_id: Optional[str] = None) -> Dict[str, Any]:
-    """List, run, pause or resume cron jobs."""
+async def cronjob_tool(
+    action: str,
+    job_id: Optional[str] = None,
+    name: Optional[str] = None,
+    schedule: str = "oneshot",
+    command: Optional[str] = None,
+    run_at: Optional[str] = None,
+    timeout: int = 300,
+    description: str = "",
+) -> Dict[str, Any]:
+    """List, create, delete, run, pause or resume cron jobs."""
     from hermes_mobile.cron import scheduler as sched
 
     action = action.lower()
+    if action == "create":
+        if not name or not command:
+            return {"error": "name and command are required for create"}
+        try:
+            job = sched.create_job(
+                name=name,
+                schedule=schedule or "oneshot",
+                command=command,
+                timeout=timeout,
+                description=description,
+                run_at=run_at,
+            )
+        except ValueError as exc:
+            return {"error": f"Invalid run_at timestamp: {exc}"}
+        return {
+            "ok": True,
+            "job_id": job.id,
+            "name": job.name,
+            "schedule": job.schedule,
+            "command": job.command,
+            "next_run": job.next_run,
+        }
+    if action == "delete":
+        if not job_id:
+            return {"error": "job_id required for delete"}
+        return {"ok": sched.delete_job(job_id), "job_id": job_id}
     if action == "list":
         jobs = sched.list_jobs()
         return {

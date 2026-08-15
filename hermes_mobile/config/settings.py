@@ -95,6 +95,15 @@ Be concise but thorough. Use tools when appropriate."""
     max_memory_entries: int = 10000
     memory_ttl_days: int = 30
 
+    # Session summary settings
+    # True: summarize sessions with the active LLM at session close (and for
+    # mid-session rolling chunks); False: extractive fallback only (offline).
+    session_summary_llm: bool = True
+    # Rolling mid-session summary trigger: when the conversation grows by this
+    # many messages, summarize the new chunk so long sessions stay bounded.
+    # 0 disables the rolling trigger (compression still runs on token pressure).
+    session_summary_messages: int = 40
+
     # Skills settings
     skills_enabled: bool = True
     skills_dir: Optional[str] = None

@@ -28,10 +28,20 @@ class BrowserSession:
         self._client: Optional[httpx.AsyncClient] = None
         self._history: List[str] = []
         self._current_url: Optional[str] = None
+        # Last successful page snapshot. Lets browser_current_page answer
+        # "what is on the page right now?" without re-fetching the URL, and
+        # survives WebView teardown on Android (view switches kill the platform
+        # view even though the Python control object survives).
+        self._last_snapshot: Optional[Dict[str, Any]] = None
         # Optional WebView automation engine (see webview_engine.py). When a
         # WebView is mounted (Browser view), navigation and interaction use the
         # real JS-capable browser; otherwise the static engine is used.
         self.webview: Optional[Any] = None
+
+    @property
+    def current_url(self) -> Optional[str]:
+        """URL of the last navigated page (WebView or static engine)."""
+        return self._current_url
 
     def attach_webview(self, engine: Any) -> None:
         """Attach a mounted WebView engine (Browser view)."""
@@ -75,7 +85,9 @@ class BrowserSession:
         if self._current_url:
             self._history.append(self._current_url)
         self._current_url = str(response.url)
-        return self._snapshot(response)
+        snapshot = self._snapshot(response)
+        self._last_snapshot = snapshot
+        return snapshot
 
     async def _navigate_webview(self, url: str) -> Dict[str, Any]:
         """Navigate inside the mounted WebView and extract the rendered page.
@@ -99,6 +111,7 @@ class BrowserSession:
             if not error and response is not None:
                 snapshot = self._snapshot(response)
                 snapshot["webview"] = False
+                self._last_snapshot = snapshot
                 return snapshot
             return {
                 "url": self._current_url,
@@ -108,7 +121,7 @@ class BrowserSession:
             }
 
         links = await self._webview_links()
-        return {
+        snapshot = {
             "url": self._current_url,
             "title": title,
             "status_code": 200,
@@ -117,6 +130,8 @@ class BrowserSession:
             "content_length": len(text),
             "webview": True,
         }
+        self._last_snapshot = snapshot
+        return snapshot
 
     async def _webview_links(self, limit: int = 20) -> List[Dict[str, str]]:
         js = (
@@ -172,7 +187,42 @@ class BrowserSession:
             self._history.append(url)
             return {"url": url, "error": "No response"}
         self._current_url = str(response.url)
-        return self._snapshot(response)
+        snapshot = self._snapshot(response)
+        self._last_snapshot = snapshot
+        return snapshot
+
+    async def current_page(self) -> Dict[str, Any]:
+        """Return the current page snapshot without navigating.
+
+        Prefers the live WebView (re-extracts rendered text via JS), then the
+        cached snapshot of the last successful load, then a re-fetch of the
+        current URL. Never requires the model to navigate again just to see
+        what is on the page.
+        """
+        if self._webview_active():
+            url = await self.webview._safe("get_current_url", default=self._current_url or "")
+            title = await self.webview._safe("get_title", default="")
+            text = await self.webview.page_text(MAX_CONTENT)
+            if text:
+                links = await self._webview_links()
+                snapshot = {
+                    "url": str(url or self._current_url or ""),
+                    "title": str(title or ""),
+                    "status_code": 200,
+                    "content": text,
+                    "links": links,
+                    "content_length": len(text),
+                    "webview": True,
+                }
+                self._last_snapshot = snapshot
+                return snapshot
+            # WebView platform view is gone (view switch on Android kills it):
+            # fall through to the cached snapshot below.
+        if self._last_snapshot:
+            return dict(self._last_snapshot)
+        if self._current_url:
+            return await self.navigate(self._current_url)
+        return {"error": "No page loaded — use browser_navigate first"}
 
     async def click_link(self, href: str) -> Dict[str, Any]:
         """Click a link by href (resolves relative to the current page)."""
@@ -273,6 +323,11 @@ class BrowserSession:
 
 # Module-level singleton so the agent keeps one tab-like session.
 _session = BrowserSession()
+
+
+async def browser_current_page_tool() -> Dict[str, Any]:
+    """Return the current page (title, content, links) without re-navigating."""
+    return await _session.current_page()
 
 
 async def browser_back_tool() -> Dict[str, Any]:

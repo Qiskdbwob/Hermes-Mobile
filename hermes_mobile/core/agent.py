@@ -17,12 +17,14 @@ from hermes_mobile.providers import ProviderProfile, get_provider_profile
 from hermes_mobile.tools.agent_tools import (
     clarify_tool,
     memory_tool,
+    session_read_tool,
     session_search_tool,
 )
 from hermes_mobile.tools.browser_session import (
     browser_back_tool,
     browser_click_selector_tool,
     browser_click_tool,
+    browser_current_page_tool,
     browser_get_images_tool,
     browser_scroll_tool,
     browser_type_tool,
@@ -199,6 +201,12 @@ class MobileAgent:
         self.session_id = str(uuid.uuid4())
         self.iteration = 0
         self.max_iterations = self.settings.max_iterations
+
+        # Session summarization state. The session is summarized by the LLM at
+        # session close (clear_conversation) plus rolling mid-session chunks;
+        # nothing runs on every turn.
+        self._last_summarized_count = 0
+        self._rolling_summary_parts: List[str] = []
 
         # Initialize OpenAI-compatible client
         self._client: Optional[Any] = None
@@ -390,6 +398,21 @@ class MobileAgent:
         stream: bool = True,
     ) -> AsyncGenerator[str, None]:
         """Run a conversation turn with the agent"""
+        # Deferred finalization: if a previous session was closed without a
+        # summary (app killed before clear_conversation could run), finalize it
+        # now so its LLM summary still lands. Bounded to one session, failure-
+        # tolerant, and never touches the current session.
+        try:
+            if self.memory_provider is not None:
+                previous = await self.memory_provider.find_unfinalized_session(
+                    exclude_session_id=self.session_id
+                )
+                if previous:
+                    msgs = await self.memory_provider.get_conversation(previous, limit=200)
+                    await self._finalize_session_from_messages(previous, msgs)
+        except Exception as exc:
+            logger.warning("Deferred session finalization failed: %s", exc)
+
         self.add_user_message(user_input)
         self.iteration = 0
 
@@ -473,6 +496,19 @@ class MobileAgent:
                 self.session_id,
                 self.messages,
             )
+
+            # Rolling mid-session summary: when the conversation grows by
+            # session_summary_messages messages, summarize the new chunk with
+            # the LLM and persist a working summary so (a) the prompt stays
+            # bounded and (b) nothing is lost if the app dies mid-session.
+            try:
+                threshold = int(getattr(self.settings, "session_summary_messages", 40) or 0)
+                use_llm = bool(getattr(self.settings, "session_summary_llm", True))
+                grown = len(self.messages) - self._last_summarized_count
+                if use_llm and threshold > 0 and grown >= threshold:
+                    await self._summarize_rolling_chunk()
+            except Exception as exc:
+                logger.warning("Rolling session summary failed: %s", exc)
 
         # Memory Harness v1: extract durable facts from this turn. Runs after
         # the turn completes; failures never break the conversation.
@@ -642,6 +678,7 @@ class MobileAgent:
             "get_time": self._tool_get_time,
             "calculate": self._tool_calculate,
             "session_search": self._tool_session_search,
+            "session_read": self._tool_session_read,
             "memory": self._tool_memory,
             "clarify": self._tool_clarify,
             "todo": self._tool_todo,
@@ -651,6 +688,7 @@ class MobileAgent:
             "cronjob": self._tool_cronjob,
             "browser_navigate": self._tool_browser_navigate,
             "browser_snapshot": self._tool_browser_snapshot,
+            "browser_current_page": self._tool_browser_current_page,
             "browser_back": self._tool_browser_back,
             "browser_click": self._tool_browser_click,
             "browser_scroll": self._tool_browser_scroll,
@@ -797,9 +835,28 @@ class MobileAgent:
             skill_manager=self.skill_manager,
         )
 
-    async def _tool_cronjob(self, action: str, job_id: Optional[str] = None) -> Dict[str, Any]:
-        """List, run, pause or resume cron jobs."""
-        return await cronjob_tool(action=action, job_id=job_id)
+    async def _tool_cronjob(
+        self,
+        action: str,
+        job_id: Optional[str] = None,
+        name: Optional[str] = None,
+        schedule: str = "oneshot",
+        command: Optional[str] = None,
+        run_at: Optional[str] = None,
+        timeout: int = 300,
+        description: str = "",
+    ) -> Dict[str, Any]:
+        """List, create, delete, run, pause or resume cron jobs."""
+        return await cronjob_tool(
+            action=action,
+            job_id=job_id,
+            name=name,
+            schedule=schedule,
+            command=command,
+            run_at=run_at,
+            timeout=timeout,
+            description=description,
+        )
 
     async def _tool_terminal(
         self,
@@ -858,6 +915,12 @@ class MobileAgent:
         """Search past conversation sessions."""
         return await session_search_tool(query, limit=limit, memory_provider=self.memory_provider)
 
+    async def _tool_session_read(self, session_id: str, limit: int = 30) -> Dict[str, Any]:
+        """Read the actual messages of a past session."""
+        return await session_read_tool(
+            session_id=session_id, limit=limit, memory_provider=self.memory_provider
+        )
+
     async def _tool_memory(
         self,
         action: str,
@@ -887,6 +950,10 @@ class MobileAgent:
     async def _tool_browser_snapshot(self, url: str) -> Dict[str, Any]:
         """Return a text snapshot of a web page."""
         return await browser_snapshot_tool(url)
+
+    async def _tool_browser_current_page(self) -> Dict[str, Any]:
+        """Return the current page (title, content, links) without re-navigating."""
+        return await browser_current_page_tool()
 
     async def _tool_browser_back(self) -> Dict[str, Any]:
         """Go back to the previous page."""
@@ -1203,7 +1270,7 @@ class MobileAgent:
                     "type": "function",
                     "function": {
                         "name": "session_search",
-                        "description": "Search past conversation sessions for relevant context",
+                        "description": "Search past conversation sessions for relevant context. If the question is vague, search with the main topic words. Results include a summary and the best-matching snippet; when they are not enough to answer accurately, open the session with session_read",
                         "parameters": {
                             "type": "object",
                             "properties": {
@@ -1211,6 +1278,28 @@ class MobileAgent:
                                 "limit": {"type": "integer", "default": 5},
                             },
                             "required": ["query"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "session_read",
+                        "description": "Read the actual messages of a past session (bounded). Use when a session_search result is not detailed enough to answer accurately — e.g. to quote what was said or check details of a previous discussion",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "session_id": {
+                                    "type": "string",
+                                    "description": "Session id from session_search results",
+                                },
+                                "limit": {
+                                    "type": "integer",
+                                    "description": "Max messages to read",
+                                    "default": 30,
+                                },
+                            },
+                            "required": ["session_id"],
                         },
                     },
                 },
@@ -1277,6 +1366,14 @@ class MobileAgent:
                             },
                             "required": ["url"],
                         },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "browser_current_page",
+                        "description": "Return the current page (title, content, links) without re-navigating. Use this instead of browser_navigate when you only need to re-read the page already open in the browsing session",
+                        "parameters": {"type": "object", "properties": {}},
                     },
                 },
                 {
@@ -1485,17 +1582,51 @@ class MobileAgent:
                     "type": "function",
                     "function": {
                         "name": "cronjob",
-                        "description": "List, run, pause or resume cron jobs",
+                        "description": "List, create, delete, run, pause or resume cron jobs. To schedule a one-off command for later, use action=create with schedule='oneshot' and run_at set to an ISO 8601 timestamp",
                         "parameters": {
                             "type": "object",
                             "properties": {
                                 "action": {
                                     "type": "string",
-                                    "enum": ["list", "run", "pause", "resume"],
+                                    "enum": [
+                                        "list",
+                                        "create",
+                                        "delete",
+                                        "run",
+                                        "pause",
+                                        "resume",
+                                    ],
+                                    "description": "Cron action",
                                 },
                                 "job_id": {
                                     "type": "string",
-                                    "description": "Job id for run/pause/resume",
+                                    "description": "Job id for delete/run/pause/resume",
+                                },
+                                "name": {
+                                    "type": "string",
+                                    "description": "Job name (required for create)",
+                                },
+                                "schedule": {
+                                    "type": "string",
+                                    "description": "Cron expression or 'oneshot' (default 'oneshot')",
+                                    "default": "oneshot",
+                                },
+                                "command": {
+                                    "type": "string",
+                                    "description": "Shell command to run (required for create)",
+                                },
+                                "run_at": {
+                                    "type": "string",
+                                    "description": "ISO 8601 timestamp for oneshot jobs (when to run)",
+                                },
+                                "timeout": {
+                                    "type": "integer",
+                                    "description": "Timeout in seconds (default 300)",
+                                    "default": 300,
+                                },
+                                "description": {
+                                    "type": "string",
+                                    "description": "Optional job description",
                                 },
                             },
                             "required": ["action"],
@@ -1835,7 +1966,7 @@ class MobileAgent:
             logger.warning("Memory snapshot build failed: %s", exc)
             self._memory_snapshot = ""
 
-    async def _summarize_with_llm(self, text: str) -> str:
+    async def _summarize_with_llm(self, text: str, max_tokens: int = 300) -> str:
         """Summarize conversation text with the active model.
 
         Bounded (30s) and failure-tolerant: returns "" on any error so the
@@ -1859,7 +1990,7 @@ class MobileAgent:
                         {"role": "user", "content": text[:12000]},
                     ],
                     temperature=0.2,
-                    max_tokens=300,
+                    max_tokens=max_tokens,
                     stream=False,
                 ),
                 timeout=30.0,
@@ -1920,11 +2051,192 @@ class MobileAgent:
         )
         return new_messages
 
+    async def _summarize_rolling_chunk(self) -> None:
+        """LLM-summarize messages since the last chunk and persist a working
+        summary (crash-safe). Falls back to the extractive summarizer when the
+        LLM is unavailable; never raises."""
+        if self.memory_provider is None:
+            return
+        from hermes_mobile.memory.summarizer import build_session_summary, extract_keywords
+
+        chunk = self.messages[self._last_summarized_count :]
+        if not chunk:
+            return
+        chunk_text = "\n".join(
+            f"{m.role}: {str(m.content or '')[:400]}" for m in chunk if m.role != "tool"
+        )
+        summary = await self._summarize_with_llm(chunk_text) if chunk_text else ""
+        if not summary:
+            summary = build_session_summary(chunk)
+        if summary:
+            self._rolling_summary_parts.append(summary)
+            working = "\n\n".join(self._rolling_summary_parts)
+            await self.memory_provider.upsert_session_summary(self.session_id, working)
+            # Keep the plaintext index in sync even if the session dies later.
+            await self.memory_provider.index_session_keywords(
+                self.session_id, extract_keywords(working)
+            )
+        self._last_summarized_count = len(self.messages)
+
+    def _session_summary_input(self, messages: Optional[List[Message]]) -> str:
+        """Compose the finalization input: rolling chunk summaries + tail."""
+        msgs = messages if messages is not None else self.messages
+        parts = list(self._rolling_summary_parts)
+        tail = msgs[-24:] if len(msgs) > 24 else msgs
+        tail_text = "\n".join(
+            f"{m.role}: {str(m.content or '')[:400]}" for m in tail if m.role != "tool"
+        )
+        if tail_text:
+            parts.append(tail_text)
+        return "\n\n".join(parts)
+
+    async def _extract_facts_from_summary(self, summary: str) -> List[str]:
+        """Ask the LLM for stable facts/preferences in the summary (one per
+        line, FACT: prefix). Returns [] on any failure — extraction is best
+        effort and must never break finalization."""
+        if self._client is None or not summary.strip():
+            return []
+        try:
+            response = await asyncio.wait_for(
+                self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "Extract stable facts and user preferences from the session "
+                                "summary. Output each one on its own line prefixed with "
+                                "'FACT: '. Output only complete statements that would still "
+                                "be true in a future session. Do not include secrets, "
+                                "passwords, or API keys. If nothing qualifies, output 'NONE'."
+                            ),
+                        },
+                        {"role": "user", "content": summary[:12000]},
+                    ],
+                    temperature=0.0,
+                    max_tokens=300,
+                    stream=False,
+                ),
+                timeout=30.0,
+            )
+            content = (
+                getattr(response.choices[0].message, "content", None) if response.choices else None
+            )
+            facts = []
+            for line in str(content or "").splitlines():
+                line = line.strip()
+                if not line or line.upper() == "NONE":
+                    continue
+                if line.startswith("FACT:"):
+                    line = line[5:].strip()
+                if line:
+                    facts.append(line)
+            return facts[:10]
+        except Exception as exc:
+            logger.warning("Fact extraction failed: %s", exc)
+            return []
+
+    async def finalize_session(self, messages: Optional[List[Message]] = None) -> Dict[str, Any]:
+        """Finalize the current session: LLM summary, plaintext keyword index,
+        and stable-fact extraction into the memory harness.
+
+        Called when the user closes the session (new chat). Falls back to the
+        extractive summarizer when the LLM is unavailable; never raises.
+        Returns a small stats dict for tests/observability.
+        """
+        stats: Dict[str, Any] = {"finalized": False}
+        if self.memory_provider is None:
+            return stats
+        msgs = messages if messages is not None else self.messages
+        if not msgs:
+            return stats
+        try:
+            from hermes_mobile.memory.summarizer import build_session_summary, extract_keywords
+
+            summary = ""
+            if bool(getattr(self.settings, "session_summary_llm", True)):
+                try:
+                    summary = await self._summarize_with_llm(
+                        self._session_summary_input(msgs), max_tokens=600
+                    )
+                except Exception as exc:
+                    logger.warning("LLM session summary failed: %s", exc)
+                    summary = ""
+            if not summary:
+                summary = build_session_summary(msgs)
+                stats["mode"] = "extractive"
+            else:
+                stats["mode"] = "llm"
+
+            if not summary:
+                return stats
+            await self.memory_provider.upsert_session_summary(self.session_id, summary)
+            await self.memory_provider.index_session_keywords(
+                self.session_id, extract_keywords(summary)
+            )
+            stats["finalized"] = True
+            stats["summary_length"] = len(summary)
+
+            # Stable facts from the summary feed the harness policy (dedup +
+            # sensitivity checks apply); failures never break finalization.
+            harness = self._get_memory_harness()
+            if harness is not None and stats.get("mode") == "llm":
+                facts = await self._extract_facts_from_summary(summary)
+                if facts:
+                    counts = await harness.add_candidates(self.session_id, facts)
+                    stats["memory"] = counts
+        except Exception as exc:
+            logger.warning("Session finalization failed: %s", exc)
+        return stats
+
+    async def _finalize_session_from_messages(
+        self, session_id: str, raw_messages: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Finalize a session loaded from the provider (deferred finalization).
+
+        Rebuilds lightweight message objects from stored dicts so finalization
+        works for sessions that were never attached to a live agent.
+        """
+        msgs: List[Message] = []
+        for row in raw_messages:
+            msgs.append(
+                Message(
+                    role=str(row.get("role") or ""),
+                    content=str(row.get("content") or ""),
+                    name=row.get("name"),
+                )
+            )
+        original = self.session_id
+        self.session_id = session_id
+        try:
+            return await self.finalize_session(messages=msgs)
+        finally:
+            self.session_id = original
+
+    def _schedule_finalize(self) -> None:
+        """Fire-and-forget session finalization before the conversation resets.
+
+        Snapshots messages first (clear_conversation empties them synchronously).
+        Without a running event loop (tests, early startup) the deferred
+        finalization in run_conversation covers the session instead.
+        """
+        if self.memory_provider is None or not self.messages:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        snapshot = list(self.messages)
+        loop.create_task(self.finalize_session(messages=snapshot))
+
     def clear_conversation(self):
         """Clear conversation history"""
+        self._schedule_finalize()
         self.messages = []
         self.session_id = str(uuid.uuid4())
         self.iteration = 0
+        self._last_summarized_count = 0
+        self._rolling_summary_parts = []
         # New session -> new frozen snapshot on the next turn.
         self._memory_snapshot = None
         self._memory_harness = None

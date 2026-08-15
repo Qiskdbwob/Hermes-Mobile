@@ -734,6 +734,143 @@ class TestTicker:
         _tick()
         mock_execute.assert_not_called()
 
+    @patch("hermes_mobile.cron.scheduler._execute_job")
+    def test_tick_oneshot_future_run_at_not_fired(self, mock_execute):
+        """A oneshot scheduled for the future must NOT run on the next tick."""
+        _ensure_cron_dirs()
+        job = CronJob(
+            id="oneshot_future",
+            name="Oneshot Future",
+            schedule="oneshot",
+            command="echo later",
+        )
+        job.next_run = "2099-01-01T00:00:00"
+        _save_jobs({"oneshot_future": job})
+
+        _tick()
+        mock_execute.assert_not_called()
+
+    @patch("hermes_mobile.cron.scheduler._execute_job")
+    def test_tick_oneshot_past_run_at_fired(self, mock_execute):
+        """A delayed oneshot whose run_at has passed runs exactly once."""
+        _ensure_cron_dirs()
+        job = CronJob(
+            id="oneshot_past",
+            name="Oneshot Past",
+            schedule="oneshot",
+            command="echo now",
+        )
+        job.next_run = "2020-01-01T00:00:00"
+        _save_jobs({"oneshot_past": job})
+
+        _tick()
+        _drain_job_threads()
+        mock_execute.assert_called_once_with(job)
+
+    @patch("hermes_mobile.cron.scheduler._execute_job")
+    def test_tick_oneshot_corrupt_run_at_never_fires(self, mock_execute):
+        """A corrupt run_at must never fire the job (silent no-op is safe)."""
+        _ensure_cron_dirs()
+        job = CronJob(
+            id="oneshot_corrupt",
+            name="Oneshot Corrupt",
+            schedule="oneshot",
+            command="echo never",
+        )
+        job.next_run = "not-a-date"
+        _save_jobs({"oneshot_corrupt": job})
+
+        _tick()
+        mock_execute.assert_not_called()
+
+    def test_create_oneshot_job_with_run_at(self):
+        """create_job must persist a delayed oneshot's run_at as next_run."""
+        _ensure_cron_dirs()
+        job = create_job(
+            name="Delayed hello",
+            schedule="oneshot",
+            command="echo hello",
+            run_at="2099-06-01T12:00:00",
+        )
+        assert job.next_run == "2099-06-01T12:00:00"
+        loaded = get_job(job.id)
+        assert loaded is not None and loaded.next_run == "2099-06-01T12:00:00"
+
+    def test_create_oneshot_invalid_run_at_raises(self):
+        _ensure_cron_dirs()
+        with pytest.raises(ValueError):
+            create_job(
+                name="Bad timestamp",
+                schedule="oneshot",
+                command="echo bad",
+                run_at="not-a-timestamp",
+            )
+        # Nothing was persisted.
+        assert list_jobs() == []
+
+
+class TestCronjobTool:
+    """Model-facing cronjob_tool surface (create/delete) — regression for the
+    missing 'create' action that forced the model to fake scheduling with a
+    background shell process instead."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_cron_dir(self, temp_dir):
+        import hermes_mobile.cron.scheduler as scheduler
+
+        original = scheduler._get_cron_dir
+        scheduler._get_cron_dir = lambda: temp_dir / "cron_tool"
+        yield
+        scheduler._get_cron_dir = original
+
+    async def test_create_action_returns_job(self):
+        from hermes_mobile.tools.desktop_tools import cronjob_tool
+
+        result = await cronjob_tool(
+            action="create",
+            name="Test hello",
+            schedule="oneshot",
+            command="echo halo ini test cron",
+            run_at="2099-06-01T12:00:00",
+        )
+        assert result["ok"] is True
+        assert result["next_run"] == "2099-06-01T12:00:00"
+        assert get_job(result["job_id"]) is not None
+
+    async def test_create_requires_name_and_command(self):
+        from hermes_mobile.tools.desktop_tools import cronjob_tool
+
+        result = await cronjob_tool(action="create", name="only-name")
+        assert "error" in result
+        result = await cronjob_tool(action="create", command="echo only-command")
+        assert "error" in result
+
+    async def test_create_invalid_run_at_returns_error(self):
+        from hermes_mobile.tools.desktop_tools import cronjob_tool
+
+        result = await cronjob_tool(
+            action="create",
+            name="Bad",
+            schedule="oneshot",
+            command="echo x",
+            run_at="nope",
+        )
+        assert "error" in result
+
+    async def test_delete_action_removes_job(self):
+        from hermes_mobile.tools.desktop_tools import cronjob_tool
+
+        job = create_job(name="To delete", schedule="oneshot", command="echo bye")
+        result = await cronjob_tool(action="delete", job_id=job.id)
+        assert result["ok"] is True
+        assert get_job(job.id) is None
+
+    async def test_delete_requires_job_id(self):
+        from hermes_mobile.tools.desktop_tools import cronjob_tool
+
+        result = await cronjob_tool(action="delete")
+        assert "error" in result
+
 
 class TestComputeNextRun:
     def test_oneshot_returns_none(self):

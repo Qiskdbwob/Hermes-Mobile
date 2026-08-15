@@ -47,6 +47,7 @@ async def session_search_tool(
                     "id": s.get("id", ""),
                     "title": s.get("title") or "Untitled",
                     "preview": (s.get("preview") or "")[:200],
+                    "summary": (s.get("summary") or "")[:400],
                     "timestamp": s.get("timestamp", ""),
                     "message_count": s.get("message_count", 0),
                 }
@@ -56,6 +57,41 @@ async def session_search_tool(
         }
     except Exception as e:
         return {"sessions": [], "query": query, "error": str(e)}
+
+
+async def session_read_tool(
+    session_id: str,
+    limit: int = 30,
+    memory_provider: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Read the actual messages of a past session (bounded).
+
+    This is the companion to session_search: when a summary or snippet is not
+    enough to answer accurately, the model opens the session and reads the
+    real messages. Tool results are truncated per message to keep the context
+    small.
+    """
+    if not memory_provider:
+        return {"session_id": session_id, "error": "Memory provider not available"}
+    try:
+        convos = await memory_provider.get_conversation(session_id, limit=limit)
+        messages = []
+        for msg in convos:
+            role = str(msg.get("role") or "")
+            content = str(msg.get("content") or "").strip()
+            if role == "tool":
+                # Tool payloads are usually noise for recall; keep a short mark.
+                name = str(msg.get("name") or "tool")
+                messages.append(f"[tool:{name}] (result omitted)")
+            elif content:
+                messages.append(f"[{role}] {content[:500]}")
+        return {
+            "session_id": session_id,
+            "message_count": len(convos),
+            "messages": messages[:limit],
+        }
+    except Exception as e:
+        return {"session_id": session_id, "error": str(e)}
 
 
 async def memory_tool(
