@@ -1,6 +1,7 @@
 """Mobile Memory Provider - SQLite-based with encryption support"""
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -16,6 +17,27 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 logger = logging.getLogger(__name__)
+
+# Memory Harness v1: memory classes and their default TTL. A None TTL means the
+# memory never expires on its own. Candidate/pending entries are short-lived by
+# design (they must be confirmed or dropped).
+MEMORY_TYPES = ("user_profile", "stable_fact", "learned_pattern", "episodic")
+MEMORY_STATUSES = (
+    "candidate",
+    "pending_confirmation",
+    "active",
+    "superseded",
+    "expired",
+    "rejected",
+)
+MEMORY_TTL_DAYS: Dict[str, Optional[int]] = {
+    "user_profile": None,
+    "stable_fact": None,
+    "learned_pattern": 90,
+    "episodic": 30,
+    "candidate": 7,
+    "pending_confirmation": 14,
+}
 
 
 class MobileMemoryProvider:
@@ -168,6 +190,54 @@ class MobileMemoryProvider:
             )
         """)
 
+        # Memory Harness v1 tables (additive; legacy tables stay untouched).
+        # content/evidence_text are encrypted like every other private column;
+        # normalized_hash is a plaintext SHA-256 of the normalized content so
+        # dedup works without FTS on ciphertext (see docs/memory-harness-v2-gap).
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS memory_items (
+                id TEXT PRIMARY KEY,
+                memory_type TEXT NOT NULL,
+                scope_type TEXT NOT NULL DEFAULT 'global',
+                scope_id TEXT,
+                content TEXT NOT NULL,
+                normalized_hash TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                confidence REAL NOT NULL DEFAULT 0.5,
+                importance REAL NOT NULL DEFAULT 0.5,
+                sensitivity REAL NOT NULL DEFAULT 0.0,
+                source_type TEXT NOT NULL DEFAULT 'agent_inference',
+                source_session_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                expires_at TEXT,
+                supersedes_id TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS memory_evidence (
+                id TEXT PRIMARY KEY,
+                memory_id TEXT NOT NULL,
+                evidence_type TEXT NOT NULL,
+                session_id TEXT,
+                evidence_text TEXT,
+                confidence REAL NOT NULL DEFAULT 0.5,
+                verified INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_summaries (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                summary_version INTEGER NOT NULL DEFAULT 1,
+                token_estimate INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+
         # Create indexes
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_conversations_session ON conversations(session_id)"
@@ -183,6 +253,24 @@ class MobileMemoryProvider:
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_skill_memory_skill ON skill_memory(skill_name)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memory_items_status ON memory_items(status, memory_type)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memory_items_hash ON memory_items(normalized_hash)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memory_items_scope ON memory_items(scope_type, scope_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memory_items_expiry ON memory_items(expires_at)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memory_evidence_memory ON memory_evidence(memory_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_session_summaries_session ON session_summaries(session_id)"
         )
 
         self._conn.commit()
@@ -691,6 +779,9 @@ class MobileMemoryProvider:
         cursor.execute(
             "DELETE FROM skill_memory WHERE expires_at IS NOT NULL AND expires_at < ?", (now,)
         )
+        cursor.execute(
+            "DELETE FROM memory_items WHERE expires_at IS NOT NULL AND expires_at < ?", (now,)
+        )
 
         conn.commit()
 
@@ -711,13 +802,371 @@ class MobileMemoryProvider:
         cursor.execute("SELECT COUNT(DISTINCT session_id) as count FROM conversations")
         session_count = cursor.fetchone()["count"]
 
+        cursor.execute("SELECT COUNT(*) as count FROM memory_items")
+        memory_item_count = cursor.fetchone()["count"]
+
+        cursor.execute("SELECT COUNT(*) as count FROM memory_evidence")
+        evidence_count = cursor.fetchone()["count"]
+
+        cursor.execute("SELECT COUNT(*) as count FROM session_summaries")
+        summary_count = cursor.fetchone()["count"]
+
         return {
             "conversations": conv_count,
             "memory_entries": mem_count,
             "skill_memory_entries": skill_mem_count,
             "sessions": session_count,
+            "memory_items": memory_item_count,
+            "memory_evidence": evidence_count,
+            "session_summaries": summary_count,
             "db_size_bytes": self.db_path.stat().st_size if self.db_path.exists() else 0,
         }
+
+    # ------------------------------------------------------------------
+    # Memory Harness v1 — memory_items / memory_evidence / session_summaries
+    # (additive API; legacy methods above remain the compatibility surface)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        """Normalize content for dedup: lowercase, collapse whitespace, strip punctuation."""
+        normalized = " ".join(str(text or "").lower().split())
+        return normalized.rstrip(".,!?;:")
+
+    @staticmethod
+    def _normalized_hash(text: str) -> str:
+        """Stable plaintext hash of the normalized content, used for O(1) dedup.
+
+        The hash itself is not reversible, so it does not leak the memory
+        content the way a plaintext copy would; on-device v1 accepts this
+        trade-off so dedup never requires FTS on ciphertext.
+        """
+        return hashlib.sha256(MobileMemoryProvider._normalize_text(text).encode()).hexdigest()
+
+    async def insert_memory_item(
+        self,
+        *,
+        content: str,
+        memory_type: str = "stable_fact",
+        scope_type: str = "global",
+        scope_id: Optional[str] = None,
+        status: str = "active",
+        confidence: float = 0.8,
+        importance: float = 0.5,
+        sensitivity: float = 0.0,
+        source_type: str = "agent_inference",
+        source_session_id: Optional[str] = None,
+        ttl_days: Optional[int] = None,
+        supersedes_id: Optional[str] = None,
+    ) -> str:
+        """Insert a memory item; returns its id."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        item_id = str(uuid.uuid4())
+        now = datetime.now().isoformat()
+        expires_at = None
+        if ttl_days:
+            expires_at = (datetime.now() + timedelta(days=ttl_days)).isoformat()
+        stored = self._encrypt(content) if self.encrypt else content
+        cursor.execute(
+            """
+            INSERT INTO memory_items (
+                id, memory_type, scope_type, scope_id, content, normalized_hash,
+                status, confidence, importance, sensitivity, source_type,
+                source_session_id, created_at, updated_at, expires_at, supersedes_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                item_id,
+                memory_type,
+                scope_type,
+                scope_id,
+                stored,
+                self._normalized_hash(content),
+                status,
+                confidence,
+                importance,
+                sensitivity,
+                source_type,
+                source_session_id,
+                now,
+                now,
+                expires_at,
+                supersedes_id,
+            ),
+        )
+        conn.commit()
+        return item_id
+
+    async def find_duplicate_memory(
+        self,
+        content: str,
+        scope_type: str = "global",
+        scope_id: Optional[str] = None,
+        statuses: tuple = ("active",),
+    ) -> Optional[Dict[str, Any]]:
+        """Return an existing memory with the same normalized content + scope."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        placeholders = ",".join("?" for _ in statuses)
+        cursor.execute(
+            f"""
+            SELECT id, content FROM memory_items
+            WHERE normalized_hash = ? AND scope_type = ? AND status IN ({placeholders})
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (self._normalized_hash(content), scope_type, *statuses),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "content": self._decrypt(row["content"]) if self.encrypt else row["content"],
+        }
+
+    async def add_memory_evidence(
+        self,
+        memory_id: str,
+        evidence_type: str,
+        session_id: Optional[str] = None,
+        evidence_text: Optional[str] = None,
+        confidence: float = 0.5,
+        verified: int = 0,
+    ) -> None:
+        """Attach a provenance record to a memory item."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        stored = self._encrypt(evidence_text) if (evidence_text and self.encrypt) else evidence_text
+        cursor.execute(
+            """
+            INSERT INTO memory_evidence (
+                id, memory_id, evidence_type, session_id, evidence_text,
+                confidence, verified, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                memory_id,
+                evidence_type,
+                session_id,
+                stored,
+                confidence,
+                int(verified),
+                datetime.now().isoformat(),
+            ),
+        )
+        conn.commit()
+
+    async def get_memory_evidence(
+        self,
+        memory_id: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Return provenance records for a memory item, newest first."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, memory_id, evidence_type, session_id, evidence_text,
+                   confidence, verified, created_at
+            FROM memory_evidence
+            WHERE memory_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (memory_id, limit),
+        )
+        records = []
+        for row in cursor.fetchall():
+            records.append(
+                {
+                    "id": row["id"],
+                    "memory_id": row["memory_id"],
+                    "evidence_type": row["evidence_type"],
+                    "session_id": row["session_id"],
+                    "evidence_text": (
+                        self._decrypt(row["evidence_text"])
+                        if (row["evidence_text"] and self.encrypt)
+                        else row["evidence_text"]
+                    ),
+                    "confidence": row["confidence"],
+                    "verified": row["verified"],
+                    "created_at": row["created_at"],
+                }
+            )
+        return records
+
+    async def list_memory_items(
+        self,
+        *,
+        statuses: tuple = ("active",),
+        memory_types: Optional[tuple] = None,
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """List memory items, newest first, optionally filtered by status/type."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        status_ph = ",".join("?" for _ in statuses)
+        params: list = [now, *statuses]
+        type_clause = ""
+        if memory_types:
+            type_ph = ",".join("?" for _ in memory_types)
+            type_clause = f" AND memory_type IN ({type_ph})"
+            params.extend(memory_types)
+        cursor.execute(
+            f"""
+            SELECT * FROM memory_items
+            WHERE (expires_at IS NULL OR expires_at > ?) AND status IN ({status_ph}){type_clause}
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        )
+        items = []
+        for row in cursor.fetchall():
+            items.append(
+                {
+                    "id": row["id"],
+                    "memory_type": row["memory_type"],
+                    "scope_type": row["scope_type"],
+                    "scope_id": row["scope_id"],
+                    "content": self._decrypt(row["content"]) if self.encrypt else row["content"],
+                    "status": row["status"],
+                    "confidence": row["confidence"],
+                    "importance": row["importance"],
+                    "sensitivity": row["sensitivity"],
+                    "source_type": row["source_type"],
+                    "source_session_id": row["source_session_id"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                    "expires_at": row["expires_at"],
+                    "supersedes_id": row["supersedes_id"],
+                }
+            )
+        return items
+
+    async def list_pending_memories(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """List candidates awaiting confirmation."""
+        return await self.list_memory_items(
+            statuses=("candidate", "pending_confirmation"),
+            limit=limit,
+        )
+
+    async def update_memory_status(self, memory_id: str, status: str) -> bool:
+        """Move a memory item to a new status. Returns True if it existed."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE memory_items SET status = ?, updated_at = ? WHERE id = ?",
+            (status, datetime.now().isoformat(), memory_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    async def supersede_memory(self, old_id: str, new_id: str) -> bool:
+        """Mark an old memory as superseded by a newer one."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE memory_items SET status = 'superseded', supersedes_id = ?, updated_at = ? "
+            "WHERE id = ?",
+            (new_id, datetime.now().isoformat(), old_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    async def get_session_summary(self, session_id: str) -> Optional[str]:
+        """Return the latest persisted summary for a session, if any."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT summary FROM session_summaries WHERE session_id = ? "
+            "ORDER BY summary_version DESC LIMIT 1",
+            (session_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._decrypt(row["summary"]) if self.encrypt else row["summary"]
+
+    async def upsert_session_summary(
+        self,
+        session_id: str,
+        summary: str,
+        token_estimate: Optional[int] = None,
+    ) -> None:
+        """Persist the latest session summary (version-incremented upsert)."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        stored = self._encrypt(summary) if self.encrypt else summary
+        cursor.execute(
+            "SELECT id, summary_version FROM session_summaries WHERE session_id = ? "
+            "ORDER BY summary_version DESC LIMIT 1",
+            (session_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            cursor.execute(
+                """
+                INSERT INTO session_summaries (
+                    id, session_id, summary, summary_version, token_estimate, created_at, updated_at
+                ) VALUES (?, ?, ?, 1, ?, ?, ?)
+                """,
+                (str(uuid.uuid4()), session_id, stored, token_estimate, now, now),
+            )
+        else:
+            cursor.execute(
+                "UPDATE session_summaries SET summary = ?, summary_version = ?, "
+                "token_estimate = ?, updated_at = ? WHERE id = ?",
+                (stored, int(row["summary_version"]) + 1, token_estimate, now, row["id"]),
+            )
+        conn.commit()
+
+    async def consolidate_memories(self) -> Dict[str, int]:
+        """Lightweight consolidation: expire stale entries and drop unconfirmed
+        candidates past their TTL. Runs on demand at lifecycle points (session
+        start, cleanup cron) — never as a background daemon.
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        expired = 0
+        dropped_candidates = 0
+
+        # 1. Expire memory_items whose expires_at passed (status kept for audit).
+        cursor.execute(
+            "UPDATE memory_items SET status = 'expired', updated_at = ? "
+            "WHERE expires_at IS NOT NULL AND expires_at < ?",
+            (now, now),
+        )
+        expired = cursor.rowcount
+
+        # 2. Drop unconfirmed candidates/pending older than their TTL.
+        for status in ("candidate", "pending_confirmation"):
+            ttl = MEMORY_TTL_DAYS.get(status)
+            if not ttl:
+                continue
+            cutoff = (datetime.now() - timedelta(days=ttl)).isoformat()
+            cursor.execute(
+                "UPDATE memory_items SET status = 'rejected', updated_at = ? "
+                "WHERE status = ? AND created_at < ?",
+                (now, status, cutoff),
+            )
+            dropped_candidates += cursor.rowcount
+
+        # 3. Prune superseded/rejected/expired rows older than 90 days (audit grace).
+        prune_cutoff = (datetime.now() - timedelta(days=90)).isoformat()
+        cursor.execute(
+            "DELETE FROM memory_items WHERE status IN ('superseded','rejected','expired') "
+            "AND updated_at < ?",
+            (prune_cutoff,),
+        )
+        pruned = cursor.rowcount
+        conn.commit()
+        return {"expired": expired, "dropped_candidates": dropped_candidates, "pruned": pruned}
 
     def close(self):
         """Close database connection"""
@@ -726,10 +1175,17 @@ class MobileMemoryProvider:
             self._conn = None
 
     def clear_all(self):
-        """Delete all conversations, memory entries and skill memory."""
+        """Delete all conversations, memory and session data."""
         conn = self._get_conn()
         with conn:
-            for table in ("conversations", "memory_entries", "skill_memory"):
+            for table in (
+                "conversations",
+                "memory_entries",
+                "skill_memory",
+                "memory_items",
+                "memory_evidence",
+                "session_summaries",
+            ):
                 conn.execute(f"DELETE FROM {table}")
         conn.commit()
 

@@ -328,7 +328,9 @@
     "search": "Search",
     "no_results": "No results found",
     "delete": "Delete",
-    "confirm_delete": "Confirm deletion"
+    "confirm_delete": "Confirm deletion",
+    "ask_title": "Save this to memory?",
+    "ask_hint": "{kind} · confidence {confidence}. This will be remembered across sessions."
   },
   "cron": {
     "title": "Scheduled Jobs",

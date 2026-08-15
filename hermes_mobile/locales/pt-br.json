@@ -328,7 +328,9 @@
     "search": "Buscar",
     "no_results": "Nenhum resultado",
     "delete": "Excluir",
-    "confirm_delete": "Confirmar exclusao"
+    "confirm_delete": "Confirmar exclusao",
+    "ask_title": "Salvar isto na memoria?",
+    "ask_hint": "{kind} · confianca {confidence}. Isto sera lembrado entre sessoes."
   },
   "cron": {
     "title": "Tarefas Agendadas",

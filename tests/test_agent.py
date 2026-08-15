@@ -759,20 +759,24 @@ class TestMobileAgent:
             await agent._execute_tool("no_such_tool", {})
 
     @patch("hermes_mobile.core.agent.compress_messages")
-    def test_apply_compression_system_user(self, mock_compress):
+    @patch.object(MobileAgent, "_summarize_with_llm", new=AsyncMock(return_value=""))
+    @pytest.mark.asyncio
+    async def test_apply_compression_system_user(self, mock_compress):
         mock_compress.return_value = [
             {"role": "system", "content": "System"},
             {"role": "user", "content": "Hello"},
         ]
         agent = MobileAgent()
         agent.add_user_message("Hello")
-        result = agent._apply_compression()
+        result = await agent._apply_compression()
         assert len(result) == 2
         assert result[0].role == "system"
         assert result[1].role == "user"
 
     @patch("hermes_mobile.core.agent.compress_messages")
-    def test_apply_compression_all_roles(self, mock_compress):
+    @patch.object(MobileAgent, "_summarize_with_llm", new=AsyncMock(return_value=""))
+    @pytest.mark.asyncio
+    async def test_apply_compression_all_roles(self, mock_compress):
         mock_compress.return_value = [
             {"role": "system", "content": "System prompt"},
             {"role": "user", "content": "Hello"},
@@ -786,7 +790,7 @@ class TestMobileAgent:
         ]
         agent = MobileAgent()
         agent.add_user_message("Hello")
-        result = agent._apply_compression()
+        result = await agent._apply_compression()
         assert len(result) == 4
         assert result[0].role == "system"
         assert result[1].role == "user"
@@ -794,6 +798,56 @@ class TestMobileAgent:
         assert result[3].role == "tool"
         assert result[3].tool_call_id == "call_1"
         assert result[3].name == "web_search"
+
+    @pytest.mark.asyncio
+    async def test_ensure_memory_snapshot_built_once(self):
+        agent = MobileAgent()
+        provider = AsyncMock()
+        provider.list_memory_items = AsyncMock(return_value=[])
+        provider.list_memory_entries = AsyncMock(return_value=[])
+        agent.memory_provider = provider
+
+        await agent._ensure_memory_snapshot()
+        snapshot = agent._memory_snapshot
+        assert snapshot is not None
+        assert "MEMORY SNAPSHOT" in snapshot
+        # Second call must NOT rebuild (frozen for the session).
+        agent.memory_provider.list_memory_items = AsyncMock(return_value=[{"content": "new"}])
+        await agent._ensure_memory_snapshot()
+        assert agent._memory_snapshot == snapshot
+
+    @pytest.mark.asyncio
+    async def test_ensure_memory_snapshot_graceful_without_provider(self):
+        agent = MobileAgent()
+        agent.memory_provider = None
+        await agent._ensure_memory_snapshot()
+        assert agent._memory_snapshot == ""
+
+    @pytest.mark.asyncio
+    async def test_snapshot_included_in_system_prompt(self):
+        agent = MobileAgent()
+        agent._memory_snapshot = "# MEMORY SNAPSHOT\n- x"
+        msgs = agent.get_messages_for_api()
+        assert "# MEMORY SNAPSHOT" in msgs[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_summarize_with_llm_fallback_on_error(self):
+        agent = MobileAgent()
+        agent._client = MagicMock()
+        agent._client.chat.completions.create = AsyncMock(side_effect=RuntimeError("boom"))
+        summary = await agent._summarize_with_llm("some text")
+        assert summary == ""
+
+    @pytest.mark.asyncio
+    async def test_summarize_with_llm_returns_content(self):
+        agent = MobileAgent()
+        agent._client = MagicMock()
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = "Decision: use X"
+        agent._client.chat.completions.create = AsyncMock(return_value=response)
+        summary = await agent._summarize_with_llm("some text")
+        assert summary == "Decision: use X"
 
     @patch("hermes_mobile.memory.provider.MobileMemoryProvider")
     @patch("hermes_mobile.skills.manager.MobileSkillManager")
@@ -919,7 +973,7 @@ class TestAgentRunConversation:
         self, mock_needs_compression, agent, mock_response
     ):
         mock_needs_compression.side_effect = [True, False]
-        agent._apply_compression = MagicMock(return_value=[])
+        agent._apply_compression = AsyncMock(return_value=[])
         agent._client = MagicMock()
         agent._client.chat.completions.create = AsyncMock(return_value=mock_response)
 
@@ -928,7 +982,7 @@ class TestAgentRunConversation:
             results.append(chunk)
 
         assert "".join(results) == "Hello back!"
-        agent._apply_compression.assert_called_once()
+        agent._apply_compression.assert_awaited_once()
 
     @patch("hermes_mobile.core.agent.needs_compression")
     async def test_run_conversation_api_error(self, mock_needs_compression, agent):

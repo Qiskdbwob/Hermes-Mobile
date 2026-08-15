@@ -267,6 +267,7 @@ class HermesMobileApp:
             on_tool_result=self._on_tool_result,
             on_message=self._on_message,
             approval_callback=self._request_tool_approval,
+            on_memory_ask=self._request_memory_confirm,
         )
 
         # Initialize plugin registry
@@ -1199,6 +1200,54 @@ class HermesMobileApp:
                         ),
                         ft.Text(
                             t("chat.approve_tool_hint"),
+                            size=12,
+                            color=ft.Colors.OUTLINE,
+                        ),
+                    ],
+                    tight=True,
+                    spacing=12,
+                ),
+                width=420,
+            ),
+            actions=[
+                ft.TextButton(t("chat.deny"), on_click=lambda e: resolve(False)),
+                ft.Button(t("chat.approve"), on_click=lambda e: resolve(True)),
+            ],
+            modal=True,
+        )
+        open_dialog(self.page, dialog)
+        return await future
+
+    async def _request_memory_confirm(self, candidate: Any) -> bool:
+        """Ask the user whether a medium-confidence memory should be saved.
+
+        Bounded: without a page (headless/gateway) it returns False so the
+        harness degrades to IGNORE and the pipeline never hangs.
+        """
+        if self.page is None:
+            return False
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[bool] = loop.create_future()
+        kind = getattr(candidate, "memory_type", "stable_fact") or "stable_fact"
+        confidence = float(getattr(candidate, "confidence", 0.5) or 0.5)
+
+        def resolve(value: bool):
+            close_dialog(self.page, dialog)
+            if not future.done():
+                future.set_result(value)
+
+        dialog = ft.AlertDialog(
+            title=ft.Text(t("memory.ask_title")),
+            content=ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            str(getattr(candidate, "content", ""))[:400],
+                            size=14,
+                            selectable=True,
+                        ),
+                        ft.Text(
+                            t("memory.ask_hint", kind=kind, confidence=f"{confidence:.0%}"),
                             size=12,
                             color=ft.Colors.OUTLINE,
                         ),

@@ -14,7 +14,12 @@ async def main():
     )
 
     await provider.cleanup_expired()
-    print("Memory cleanup completed")
+    counts = await provider.consolidate_memories()
+    print(
+        "Memory cleanup completed "
+        f"(expired={counts.get('expired', 0)}, "
+        f"candidates_dropped={counts.get('dropped_candidates', 0)})"
+    )
 
     provider.close()
 

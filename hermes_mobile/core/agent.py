@@ -162,6 +162,7 @@ class MobileAgent:
         blocked_tools: Optional[set[str]] = None,
         approval_callback: Optional[Callable[[str, Dict[str, Any]], Awaitable[bool]]] = None,
         approval_tools: Optional[set[str]] = None,
+        on_memory_ask: Optional[Callable[[Any], Awaitable[bool]]] = None,
     ):
         self.settings = get_settings()
         self.model = model or self.settings.default_model
@@ -178,6 +179,11 @@ class MobileAgent:
         self._approval_tools = frozenset(
             approval_tools if approval_tools is not None else {"terminal", "process"}
         )
+        # Memory Harness v1: confirmation callback for ASK decisions. None means
+        # non-interactive context (gateway/remote) -> ASK degrades to IGNORE.
+        self.on_memory_ask = on_memory_ask
+        self._memory_snapshot: Optional[str] = None
+        self._memory_harness: Optional[Any] = None
         self.process_registry = MobileProcessRegistry()
         # Active project workspace (set by project_switch / the artifacts view).
         # File tools resolve relative paths and extra sandbox roots against it.
@@ -348,7 +354,10 @@ class MobileAgent:
 
     def get_messages_for_api(self) -> List[Dict[str, Any]]:
         """Get messages in API format with caching if supported."""
-        messages = [{"role": "system", "content": self.system_prompt}]
+        system_content = self.system_prompt
+        if self._memory_snapshot:
+            system_content = f"{self.system_prompt}\n\n{self._memory_snapshot}"
+        messages = [{"role": "system", "content": system_content}]
 
         for msg in self.messages:
             api_msg = {"role": msg.role, "content": msg.content}
@@ -384,12 +393,17 @@ class MobileAgent:
         self.add_user_message(user_input)
         self.iteration = 0
 
+        # Frozen memory snapshot: built once per session and never mutated
+        # during it, so the stable system region (and prompt cache) stays
+        # unchanged across turns.
+        await self._ensure_memory_snapshot()
+
         while self.iteration < self.max_iterations:
             self.iteration += 1
 
             api_messages = self.get_messages_for_api()
             if needs_compression(api_messages, self.settings.max_context_tokens):
-                self.messages = self._apply_compression()
+                self.messages = await self._apply_compression()
                 api_messages = self.get_messages_for_api()
 
             try:
@@ -459,6 +473,15 @@ class MobileAgent:
                 self.session_id,
                 self.messages,
             )
+
+        # Memory Harness v1: extract durable facts from this turn. Runs after
+        # the turn completes; failures never break the conversation.
+        try:
+            harness = self._get_memory_harness()
+            if harness is not None:
+                await harness.process_turn(self.session_id, user_input)
+        except Exception as exc:
+            logger.warning("Memory harness turn failed: %s", exc)
 
     async def _call_model(self, stream: bool = True):
         """Call the model API"""
@@ -1772,21 +1795,128 @@ class MobileAgent:
             )
         return Message.user(content)
 
-    def _apply_compression(self) -> List[Message]:
+    def _get_memory_harness(self) -> Optional[Any]:
+        """Lazily build the Memory Harness (no provider -> None)."""
+        if self._memory_harness is not None:
+            return self._memory_harness
+        if self.memory_provider is None:
+            return None
+        try:
+            from hermes_mobile.memory.harness import MemoryHarness
+
+            self._memory_harness = MemoryHarness(
+                provider=self.memory_provider,
+                ask_callback=self.on_memory_ask,
+            )
+        except Exception as exc:
+            logger.warning("Memory harness init failed: %s", exc)
+            self._memory_harness = None
+        return self._memory_harness
+
+    async def _ensure_memory_snapshot(self) -> None:
+        """Build the frozen memory snapshot once per session.
+
+        The snapshot is rendered at the first turn and never mutated during
+        the session, keeping the stable system region (and prompt cache)
+        unchanged across turns. New memories persist but only enter the
+        snapshot on the next session.
+        """
+        if self._memory_snapshot is not None:
+            return
+        harness = self._get_memory_harness()
+        if harness is None:
+            self._memory_snapshot = ""
+            return
+        try:
+            budget = int(getattr(self.settings, "memory_snapshot_tokens", 800) or 800)
+            snapshot = await harness.build_snapshot(token_budget=budget)
+            self._memory_snapshot = snapshot or ""
+        except Exception as exc:
+            logger.warning("Memory snapshot build failed: %s", exc)
+            self._memory_snapshot = ""
+
+    async def _summarize_with_llm(self, text: str) -> str:
+        """Summarize conversation text with the active model.
+
+        Bounded (30s) and failure-tolerant: returns "" on any error so the
+        caller falls back to the extractive placeholder summary.
+        """
+        if self._client is None or not text.strip():
+            return ""
+        try:
+            response = await asyncio.wait_for(
+                self._client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "Summarize the conversation in the user's language. "
+                                "Keep decisions, unresolved tasks, important facts and "
+                                "tool results. Return only the summary text."
+                            ),
+                        },
+                        {"role": "user", "content": text[:12000]},
+                    ],
+                    temperature=0.2,
+                    max_tokens=300,
+                    stream=False,
+                ),
+                timeout=30.0,
+            )
+            content = (
+                getattr(response.choices[0].message, "content", None) if response.choices else None
+            )
+            return str(content or "").strip()
+        except Exception as exc:
+            logger.warning("LLM summarization failed, using extractive fallback: %s", exc)
+            return ""
+
+    async def _apply_compression(self) -> List[Message]:
         """Compress conversation to save token space.
 
-        Rebuilds messages from the compressed API dicts while preserving
-        assistant tool_calls (dropping them orphans the tool result messages
-        that follow and makes the API reject the conversation).
+        Tries a real LLM summary of the middle section first; on failure it
+        falls back to the extractive placeholder behavior. Rebuilds messages
+        from the compressed API dicts while preserving assistant tool_calls
+        (dropping them orphans the tool result messages that follow and makes
+        the API reject the conversation).
 
         Returns new compressed message list.
         """
         api_messages = self.get_messages_for_api()
-        compressed = compress_messages(api_messages, self.settings.max_context_tokens)
+        summary_text = ""
+        try:
+            system_prompt = (
+                api_messages[0]
+                if api_messages and api_messages[0].get("role") == "system"
+                else None
+            )
+            tail_start = (
+                max(1, len(api_messages) - 6) if system_prompt else max(0, len(api_messages) - 6)
+            )
+            while tail_start < len(api_messages) and api_messages[tail_start].get("role") == "tool":
+                tail_start += 1
+            middle = api_messages[1:tail_start] if system_prompt else api_messages[:tail_start]
+            if middle:
+                middle_text = "\n".join(
+                    f"{m.get('role')}: {str(m.get('content') or '')[:400]}" for m in middle
+                )
+                summary_text = await self._summarize_with_llm(middle_text)
+        except Exception as exc:
+            logger.warning("Compression summary prep failed: %s", exc)
+
+        compressed = compress_messages(
+            api_messages,
+            self.settings.max_context_tokens,
+            previous_summary=summary_text or None,
+        )
         new_messages = [self._dict_to_message(msg_dict) for msg_dict in compressed]
         self.messages = new_messages
         logger.info(
-            "Compressed conversation: %d -> %d messages", len(api_messages), len(new_messages)
+            "Compressed conversation: %d -> %d messages (llm_summary=%s)",
+            len(api_messages),
+            len(new_messages),
+            bool(summary_text),
         )
         return new_messages
 
@@ -1795,6 +1925,9 @@ class MobileAgent:
         self.messages = []
         self.session_id = str(uuid.uuid4())
         self.iteration = 0
+        # New session -> new frozen snapshot on the next turn.
+        self._memory_snapshot = None
+        self._memory_harness = None
 
 
 def create_mobile_agent(

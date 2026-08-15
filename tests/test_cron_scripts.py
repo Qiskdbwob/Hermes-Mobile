@@ -17,6 +17,9 @@ class TestCleanupMemory:
 
         mock_provider = MagicMock()
         mock_provider.cleanup_expired = AsyncMock()
+        mock_provider.consolidate_memories = AsyncMock(
+            return_value={"expired": 0, "dropped_candidates": 0, "pruned": 0}
+        )
         MockProvider.return_value = mock_provider
 
         import asyncio
@@ -30,6 +33,7 @@ class TestCleanupMemory:
             encrypt=False,
         )
         mock_provider.cleanup_expired.assert_awaited_once()
+        mock_provider.consolidate_memories.assert_awaited_once()
         mock_provider.close.assert_called_once()
 
 
