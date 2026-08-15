@@ -49,7 +49,10 @@ class WebViewEngine:
         self._page = page
         self._control: Optional[Any] = None
         self._container: Optional[Any] = None
-        self._page_ended = asyncio.Event()
+        # Created lazily inside async methods: on Python 3.9, asyncio.Event()
+        # binds to the current event loop at construction and raises when no
+        # loop exists yet (engine is built by UI code outside a running loop).
+        self._page_ended: Optional[asyncio.Event] = None
         self._last_error: Optional[str] = None
 
     @property
@@ -73,7 +76,9 @@ class WebViewEngine:
         return self._control
 
     def _on_page_ended(self) -> None:
-        self._page_ended.set()
+        event = self._page_ended
+        if event is not None:
+            event.set()
 
     def _on_resource_error(self, event: Any) -> None:
         data = getattr(event, "data", None)
@@ -124,6 +129,7 @@ class WebViewEngine:
         except asyncio.TimeoutError:
             # The page may still render; the snapshot decides what is usable.
             pass
+        self._page_ended = None
         title = await self._safe("get_title", default="")
         current = await self._safe("get_current_url", default=url)
         return {
