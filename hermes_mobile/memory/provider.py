@@ -805,6 +805,12 @@ class MobileMemoryProvider:
         cursor.execute("SELECT COUNT(*) as count FROM memory_items")
         memory_item_count = cursor.fetchone()["count"]
 
+        cursor.execute(
+            "SELECT COUNT(*) as count FROM memory_items "
+            "WHERE status IN ('candidate', 'pending_confirmation')"
+        )
+        pending_count = cursor.fetchone()["count"]
+
         cursor.execute("SELECT COUNT(*) as count FROM memory_evidence")
         evidence_count = cursor.fetchone()["count"]
 
@@ -819,6 +825,7 @@ class MobileMemoryProvider:
             "memory_items": memory_item_count,
             "memory_evidence": evidence_count,
             "session_summaries": summary_count,
+            "pending_memories": pending_count,
             "db_size_bytes": self.db_path.stat().st_size if self.db_path.exists() else 0,
         }
 
@@ -1003,13 +1010,22 @@ class MobileMemoryProvider:
         statuses: tuple = ("active",),
         memory_types: Optional[tuple] = None,
         limit: int = 200,
+        include_expired: bool = False,
     ) -> List[Dict[str, Any]]:
-        """List memory items, newest first, optionally filtered by status/type."""
+        """List memory items, newest first, optionally filtered by status/type.
+
+        ``include_expired`` disables the expiry filter so archived rows
+        (superseded/expired/rejected) stay visible in management UIs.
+        """
         conn = self._get_conn()
         cursor = conn.cursor()
-        now = datetime.now().isoformat()
         status_ph = ",".join("?" for _ in statuses)
-        params: list = [now, *statuses]
+        params: list = []
+        expiry_clause = ""
+        if not include_expired:
+            expiry_clause = "(expires_at IS NULL OR expires_at > ?) AND "
+            params.append(datetime.now().isoformat())
+        params.extend(statuses)
         type_clause = ""
         if memory_types:
             type_ph = ",".join("?" for _ in memory_types)
@@ -1018,7 +1034,7 @@ class MobileMemoryProvider:
         cursor.execute(
             f"""
             SELECT * FROM memory_items
-            WHERE (expires_at IS NULL OR expires_at > ?) AND status IN ({status_ph}){type_clause}
+            WHERE {expiry_clause}status IN ({status_ph}){type_clause}
             ORDER BY updated_at DESC
             LIMIT ?
             """,
@@ -1062,6 +1078,15 @@ class MobileMemoryProvider:
             "UPDATE memory_items SET status = ?, updated_at = ? WHERE id = ?",
             (status, datetime.now().isoformat(), memory_id),
         )
+        conn.commit()
+        return cursor.rowcount > 0
+
+    async def delete_memory_item(self, memory_id: str) -> bool:
+        """Hard-delete a memory item together with its evidence records."""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM memory_evidence WHERE memory_id = ?", (memory_id,))
+        cursor.execute("DELETE FROM memory_items WHERE id = ?", (memory_id,))
         conn.commit()
         return cursor.rowcount > 0
 

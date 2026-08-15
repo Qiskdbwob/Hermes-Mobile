@@ -1,10 +1,13 @@
 """Memory View - Memory management interface.
 
-Shows memory statistics plus three data tabs (Conversations, Long-term,
-Skill) fed from the memory provider. Every async load is a one-shot task
-that updates its own container in place — nothing here rebuilds the whole
-view from inside a refresh, which previously caused an endless
-rebuild/refresh loop while the view was open.
+Shows memory statistics plus four data tabs (Conversations, Memory,
+Long-term, Skill) fed from the memory provider. The Memory tab manages the
+Memory Harness v1 ``memory_items`` (filter by status, approve candidates,
+view evidence, delete) while Long-term keeps the legacy ``memory_entries``.
+
+Every async load is a one-shot task that updates its own container in place —
+nothing here rebuilds the whole view from inside a refresh, which previously
+caused an endless rebuild/refresh loop while the view was open.
 """
 
 from __future__ import annotations
@@ -16,16 +19,47 @@ from typing import Any, Dict, List, Optional
 
 import flet as ft
 
+from hermes_mobile.ui.common import close_dialog, open_dialog, snack
 from hermes_mobile.ui.theme import mode_colors
 
 logger = logging.getLogger(__name__)
 
 _TABS = (
     ("conversations", "Conversations", ft.Icons.CHAT),
+    ("memory", "Memory", ft.Icons.FACT_CHECK),
     ("longterm", "Long-term", ft.Icons.PSYCHOLOGY),
     ("skill", "Skill", ft.Icons.EXTENSION),
 )
 _TAB_KEYS = {key for key, _, _ in _TABS}
+
+# (key, label, statuses, include_expired) — archive rows (superseded/expired/
+# rejected) have past expires_at, so they need the expiry filter disabled.
+_MEMORY_FILTERS = (
+    ("active", "Active", ("active",), False),
+    ("pending", "Pending", ("candidate", "pending_confirmation"), False),
+    ("archived", "Archived", ("superseded", "expired", "rejected"), True),
+)
+
+_TYPE_LABELS = {
+    "user_profile": "Profile",
+    "stable_fact": "Fact",
+    "learned_pattern": "Pattern",
+    "episodic": "Event",
+}
+_TYPE_ICONS = {
+    "user_profile": ft.Icons.PERSON_OUTLINE,
+    "stable_fact": ft.Icons.FACT_CHECK,
+    "learned_pattern": ft.Icons.AUTO_AWESOME,
+    "episodic": ft.Icons.EVENT,
+}
+_STATUS_COLORS = {
+    "active": ft.Colors.GREEN,
+    "candidate": ft.Colors.AMBER,
+    "pending_confirmation": ft.Colors.AMBER,
+    "superseded": ft.Colors.OUTLINE,
+    "expired": ft.Colors.OUTLINE,
+    "rejected": ft.Colors.OUTLINE,
+}
 
 
 class MemoryView:
@@ -37,6 +71,7 @@ class MemoryView:
         self.memory_provider = app.memory_provider
         self._cached_stats: Optional[Dict[str, Any]] = None
         self.active_tab = "conversations"
+        self._memory_filter = "active"
         self._stats_row: Optional[ft.Row] = None
         self._tab_strip: Optional[ft.Row] = None
         self._content: Optional[ft.Container] = None
@@ -105,6 +140,8 @@ class MemoryView:
                 "sessions": 0,
                 "memory_entries": 0,
                 "skill_memory_entries": 0,
+                "memory_items": 0,
+                "pending_memories": 0,
                 "db_size_bytes": 0,
             }
         if self._stats_row is not None:
@@ -131,7 +168,10 @@ class MemoryView:
         return [
             self._build_stat_card("Chats", str(stats.get("conversations", 0)), ft.Icons.CHAT),
             self._build_stat_card("Sessions", str(stats.get("sessions", 0)), ft.Icons.MESSAGE),
-            self._build_stat_card("Entries", str(stats.get("memory_entries", 0)), ft.Icons.MEMORY),
+            self._build_stat_card("Facts", str(stats.get("memory_items", 0)), ft.Icons.FACT_CHECK),
+            self._build_stat_card(
+                "Pending", str(stats.get("pending_memories", 0)), ft.Icons.PENDING_ACTIONS
+            ),
             self._build_stat_card(
                 "Size", self._format_size(stats.get("db_size_bytes", 0)), ft.Icons.STORAGE
             ),
@@ -267,6 +307,8 @@ class MemoryView:
         try:
             if self.active_tab == "conversations":
                 controls = await self._load_conversations()
+            elif self.active_tab == "memory":
+                controls = await self._load_memory_items()
             elif self.active_tab == "longterm":
                 controls = await self._load_longterm()
             else:
@@ -349,6 +391,274 @@ class MemoryView:
                 )
             )
         return controls
+
+    # ------------------------------------------------------------------
+    # Memory Harness tab (memory_items)
+    # ------------------------------------------------------------------
+
+    async def _load_memory_items(self) -> List[ft.Control]:
+        controls: List[ft.Control] = [self._build_memory_filter_chips()]
+        filter_row = next(
+            (f for f in _MEMORY_FILTERS if f[0] == self._memory_filter), _MEMORY_FILTERS[0]
+        )
+        _, _, statuses, include_expired = filter_row
+        try:
+            items = await self.memory_provider.list_memory_items(
+                statuses=statuses, limit=200, include_expired=include_expired
+            )
+        except Exception:
+            logger.exception("Memory items load failed")
+            items = []
+        if not items:
+            controls.append(
+                self._empty_state("No memory here yet — ask the agent to remember something")
+            )
+            return controls
+        controls.extend(self._build_memory_item_row(item) for item in items)
+        return controls
+
+    def _build_memory_filter_chips(self) -> ft.Control:
+        colors = mode_colors(self.app.dark_mode)
+        pills = []
+        for key, label, _, _ in _MEMORY_FILTERS:
+            active = key == self._memory_filter
+            pills.append(
+                ft.Container(
+                    content=ft.Text(
+                        label,
+                        size=11,
+                        weight=ft.FontWeight.W_600 if active else ft.FontWeight.W_500,
+                        color=colors["primary_foreground"]
+                        if active
+                        else colors["muted_foreground"],
+                    ),
+                    padding=ft.Padding.symmetric(horizontal=12, vertical=6),
+                    bgcolor=colors["primary"] if active else None,
+                    border=ft.Border.all(1, colors["primary"] if active else colors["border"]),
+                    border_radius=ft.BorderRadius.all(18),
+                    ink=True,
+                    on_click=lambda e, value=key: self._on_memory_filter_change(value),
+                )
+            )
+        return ft.Row(pills, spacing=8)
+
+    def _on_memory_filter_change(self, key: str) -> None:
+        """Switch the memory status filter and reload the tab in place."""
+        if key == self._memory_filter:
+            return
+        self._memory_filter = key
+        if self._content is not None:
+            self._content.content = self._loading_state()
+            self._schedule(self._load_active_tab())
+        try:
+            self.page.update()
+        except Exception:
+            logger.debug("Could not update memory filter", exc_info=True)
+
+    def _build_memory_item_row(self, item: Dict[str, Any]) -> ft.Control:
+        c = mode_colors(self.app.dark_mode)
+        status = str(item.get("status") or "active")
+        kind = str(item.get("memory_type") or "stable_fact")
+        confidence = float(item.get("confidence") or 0)
+        when = self._format_when(item.get("created_at"))
+
+        actions: List[ft.Control] = []
+        if status in ("candidate", "pending_confirmation"):
+            actions.append(
+                ft.IconButton(
+                    icon=ft.Icons.CHECK,
+                    tooltip="Approve",
+                    icon_color=ft.Colors.GREEN,
+                    on_click=lambda e, mid=str(item.get("id")): self._approve_memory(mid),
+                )
+            )
+        actions.append(
+            ft.IconButton(
+                icon=ft.Icons.INFO_OUTLINE,
+                tooltip="Evidence",
+                on_click=lambda e, mid=str(item.get("id")): self._show_evidence(mid),
+            )
+        )
+        actions.append(
+            ft.IconButton(
+                icon=ft.Icons.DELETE_OUTLINE,
+                tooltip="Delete",
+                icon_color=c["destructive"],
+                on_click=lambda e, item=item: self._delete_memory(item),
+            )
+        )
+
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(
+                                _TYPE_ICONS.get(kind, ft.Icons.PSYCHOLOGY),
+                                size=14,
+                                color=c["primary"],
+                            ),
+                            ft.Text(
+                                _TYPE_LABELS.get(kind, kind.replace("_", " ")),
+                                size=10,
+                                weight=ft.FontWeight.W_600,
+                                color=c["muted_foreground"],
+                            ),
+                            ft.Container(
+                                content=ft.Text(
+                                    status.replace("_", " "),
+                                    size=9,
+                                    weight=ft.FontWeight.W_600,
+                                    color=_STATUS_COLORS.get(status, ft.Colors.OUTLINE),
+                                ),
+                                padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+                                border=ft.Border.all(
+                                    1, _STATUS_COLORS.get(status, ft.Colors.OUTLINE)
+                                ),
+                                border_radius=ft.BorderRadius.all(9),
+                            ),
+                            ft.Text(
+                                f"{confidence:.0%}",
+                                size=10,
+                                color=c["muted_foreground"],
+                                font_family="monospace",
+                            ),
+                            ft.Text(
+                                when,
+                                size=10,
+                                color=c["muted_foreground"],
+                                font_family="monospace",
+                            ),
+                        ],
+                        spacing=8,
+                        wrap=True,
+                    ),
+                    ft.Text(
+                        str(item.get("content") or ""),
+                        size=13,
+                        color=c["foreground"],
+                        selectable=True,
+                        max_lines=3,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                    ),
+                    ft.Row(actions, spacing=0),
+                ],
+                spacing=4,
+            ),
+            padding=ft.Padding.only(left=4, right=4, top=8, bottom=8),
+            border=ft.Border.only(bottom=ft.BorderSide(1, c["border"])),
+        )
+
+    def _approve_memory(self, memory_id: str) -> None:
+        """Approve a candidate/pending memory so it enters the active set."""
+
+        async def run():
+            try:
+                ok = await self.memory_provider.update_memory_status(memory_id, "active")
+                snack(self.page, "Memory approved" if ok else "Memory not found", error=not ok)
+            except Exception:
+                logger.exception("Could not approve memory")
+                snack(self.page, "Could not approve memory", error=True)
+            finally:
+                self._reload_memory_tab()
+
+        self._schedule(run())
+
+    def _delete_memory(self, item: Dict[str, Any]) -> ft.AlertDialog:
+        """Ask for confirmation, then hard-delete the memory item + evidence."""
+        memory_id = str(item.get("id") or "")
+        content = str(item.get("content") or "")
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[bool] = loop.create_future()
+
+        def resolve(value: bool):
+            close_dialog(self.page, dialog)
+            if not future.done():
+                future.set_result(value)
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Delete memory?"),
+            content=ft.Text(
+                content[:200] if content else "Remove this memory permanently?",
+                size=13,
+                selectable=True,
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda e: resolve(False)),
+                ft.Button("Delete", on_click=lambda e: resolve(True)),
+            ],
+            modal=True,
+        )
+        open_dialog(self.page, dialog)
+
+        async def run():
+            try:
+                if not await future:
+                    return
+                ok = await self.memory_provider.delete_memory_item(memory_id)
+                snack(self.page, "Memory deleted" if ok else "Memory not found", error=not ok)
+            except Exception:
+                logger.exception("Could not delete memory")
+                snack(self.page, "Could not delete memory", error=True)
+            finally:
+                self._reload_memory_tab()
+
+        self._schedule(run())
+        return dialog
+
+    def _show_evidence(self, memory_id: str) -> None:
+        """Show provenance records for a memory item in a dialog."""
+
+        async def run():
+            try:
+                records = await self.memory_provider.get_memory_evidence(memory_id, limit=50)
+            except Exception:
+                logger.exception("Could not load memory evidence")
+                records = []
+            if not records:
+                snack(self.page, "No evidence records for this memory", error=True)
+                return
+            lines: List[ft.Control] = []
+            for record in records:
+                when = self._format_when(record.get("created_at"))
+                verified = " ✓ verified" if record.get("verified") else ""
+                header = f"{str(record.get('evidence_type') or 'unknown')}{verified} · {when}"
+                lines.append(
+                    ft.Text(
+                        header,
+                        size=11,
+                        weight=ft.FontWeight.W_600,
+                        color=ft.Colors.OUTLINE,
+                        font_family="monospace",
+                    )
+                )
+                lines.append(
+                    ft.Text(
+                        str(record.get("evidence_text") or "(no excerpt)")[:300],
+                        size=12,
+                        selectable=True,
+                    )
+                )
+            dialog = ft.AlertDialog(
+                title=ft.Text("Memory evidence"),
+                content=ft.Container(
+                    content=ft.ListView(controls=lines, spacing=8),
+                    width=420,
+                    height=340,
+                ),
+                actions=[
+                    ft.TextButton("Close", on_click=lambda e: close_dialog(self.page, dialog))
+                ],
+                modal=True,
+            )
+            open_dialog(self.page, dialog)
+
+        self._schedule(run())
+
+    def _reload_memory_tab(self) -> None:
+        """Re-run the active tab load after a mutation (approve/delete)."""
+        if self.active_tab == "memory":
+            self._schedule(self._load_active_tab())
 
     async def _load_longterm(self) -> List[ft.Control]:
         entries = await self.memory_provider.list_memory_entries(limit=100)
