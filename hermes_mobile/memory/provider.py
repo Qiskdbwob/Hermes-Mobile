@@ -39,6 +39,10 @@ MEMORY_TTL_DAYS: Dict[str, Optional[int]] = {
     "pending_confirmation": 14,
 }
 
+# Bounded-decrypt window for session search: how many recent messages per
+# candidate session get decrypted and scanned (see docs/memory-harness-v2-gap.md).
+_SEARCH_WINDOW = 25
+
 
 class MobileMemoryProvider:
     """SQLite-based memory provider for mobile with optional encryption"""
@@ -642,41 +646,57 @@ class MobileMemoryProvider:
     async def search_sessions(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Search conversation sessions by content.
 
-        Uses SQL LIKE for plaintext, Python filtering for encrypted data.
-        Returns a list of session summaries matching the query.
+        Uses SQL LIKE for plaintext. For encrypted data it decrypts a bounded
+        window of recent messages per candidate session (bounded-decrypt, see
+        docs/memory-harness-v2-gap.md) so matches buried earlier in a session
+        are still found without decrypting the whole database, then ranks the
+        matching sessions by keyword-hit count.
         """
         conn = self._get_conn()
         cursor = conn.cursor()
         keywords = query.lower().split()
+        if not keywords:
+            return []
 
         if self.encrypt:
             cursor.execute(
-                "SELECT DISTINCT session_id FROM conversations ORDER BY timestamp DESC LIMIT ?",
+                "SELECT session_id, MAX(timestamp) AS last_at FROM conversations "
+                "GROUP BY session_id ORDER BY last_at DESC LIMIT ?",
                 (limit * 10,),
             )
             results = []
             for sid_row in cursor.fetchall():
                 sid = sid_row["session_id"]
                 cursor.execute(
-                    "SELECT content, timestamp FROM conversations WHERE session_id = ? ORDER BY timestamp DESC LIMIT 1",
-                    (sid,),
+                    "SELECT content, timestamp FROM conversations WHERE session_id = ? "
+                    "ORDER BY timestamp DESC LIMIT ?",
+                    (sid, _SEARCH_WINDOW),
                 )
-                row = cursor.fetchone()
-                if not row:
+                rows = cursor.fetchall()
+                if not rows:
                     continue
-                content = self._decrypt(row["content"])
-                if any(kw in content.lower() for kw in keywords):
+                hits = 0
+                title = "Untitled"
+                preview = ""
+                last_at = rows[0]["timestamp"]
+                for row in rows:
+                    content = self._decrypt(row["content"])
+                    if not preview:
+                        preview = content
+                        title = content[:80] if content else "Untitled"
+                    hits += sum(1 for kw in keywords if kw in content.lower())
+                if hits:
                     results.append(
                         {
                             "id": sid,
-                            "title": content[:80] if content else "Untitled",
-                            "preview": content,
-                            "timestamp": row["timestamp"],
+                            "title": title,
+                            "preview": preview,
+                            "timestamp": last_at,
+                            "score": hits,
                         }
                     )
-                    if len(results) >= limit:
-                        break
-            return results
+            results.sort(key=lambda r: r["score"], reverse=True)
+            return results[:limit]
 
         like_conditions = " OR ".join("LOWER(c.content) LIKE ?" for _ in keywords)
         params = [f"%{kw}%" for kw in keywords]
@@ -1162,9 +1182,11 @@ class MobileMemoryProvider:
         dropped_candidates = 0
 
         # 1. Expire memory_items whose expires_at passed (status kept for audit).
+        #    Skip rows already expired so updated_at is not bumped every run —
+        #    otherwise the prune below (aged from expires_at) would never match.
         cursor.execute(
             "UPDATE memory_items SET status = 'expired', updated_at = ? "
-            "WHERE expires_at IS NOT NULL AND expires_at < ?",
+            "WHERE expires_at IS NOT NULL AND expires_at < ? AND status != 'expired'",
             (now, now),
         )
         expired = cursor.rowcount
@@ -1182,12 +1204,15 @@ class MobileMemoryProvider:
             )
             dropped_candidates += cursor.rowcount
 
-        # 3. Prune superseded/rejected/expired rows older than 90 days (audit grace).
+        # 3. Prune archived rows after the 90-day audit grace. Expired rows are
+        #    aged from their expires_at (their updated_at is bumped at expiry
+        #    time), superseded/rejected from their updated_at.
         prune_cutoff = (datetime.now() - timedelta(days=90)).isoformat()
         cursor.execute(
-            "DELETE FROM memory_items WHERE status IN ('superseded','rejected','expired') "
-            "AND updated_at < ?",
-            (prune_cutoff,),
+            "DELETE FROM memory_items "
+            "WHERE (status = 'expired' AND expires_at < ?) "
+            "OR (status IN ('superseded','rejected') AND updated_at < ?)",
+            (prune_cutoff, prune_cutoff),
         )
         pruned = cursor.rowcount
         conn.commit()

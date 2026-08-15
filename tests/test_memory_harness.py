@@ -143,11 +143,15 @@ class TestMemoryHarness:
         assert await memory_provider.list_memory_items(statuses=("active",)) == []
 
     @pytest.mark.asyncio
-    async def test_ask_without_callback_degrades_to_ignore(self, memory_provider):
+    async def test_ask_without_callback_queues_pending(self, memory_provider):
         h = MemoryHarness(provider=memory_provider)
         res = await h.process_turn("s1", "Please always give me concise answers.")
-        assert res["asked"] == 1 and res["approved"] == 0
+        assert res["asked"] == 1 and res["approved"] == 0 and res["pending"] == 1
         assert await memory_provider.list_memory_items(statuses=("active",)) == []
+        pending = await memory_provider.list_pending_memories()
+        assert len(pending) == 1
+        assert pending[0]["status"] == "pending_confirmation"
+        assert pending[0]["content"] == "Please always give me concise answers."
 
     @pytest.mark.asyncio
     async def test_ask_timeout_degrades_to_ignore(self, memory_provider):
@@ -302,6 +306,32 @@ class TestMemoryItemsRepository:
         conn.commit()
         counts = await memory_provider.consolidate_memories()
         assert counts["expired"] == 1
+
+    @pytest.mark.asyncio
+    async def test_consolidate_expired_not_rebumped_and_pruned_after_grace(self, memory_provider):
+        """Expired rows must not have updated_at bumped every run (which would
+        make the 90-day audit-grace prune never match them), and must be aged
+        from expires_at once past the grace."""
+        from datetime import datetime, timedelta
+
+        mid = await memory_provider.insert_memory_item(
+            content="audit row", memory_type="episodic", ttl_days=-30
+        )
+        first = await memory_provider.consolidate_memories()
+        assert first["expired"] == 1 and first["pruned"] == 0
+
+        # Second pass must not re-expire the same row (bug: updated_at was
+        # bumped to now every run, so pruning by updated_at never matched).
+        second = await memory_provider.consolidate_memories()
+        assert second["expired"] == 0
+
+        # Once past the 90-day grace (aged from expires_at), it prunes.
+        conn = memory_provider._get_conn()
+        past = (datetime.now() - timedelta(days=120)).isoformat()
+        conn.execute("UPDATE memory_items SET expires_at = ? WHERE id = ?", (past, mid))
+        conn.commit()
+        third = await memory_provider.consolidate_memories()
+        assert third["pruned"] == 1
 
     @pytest.mark.asyncio
     async def test_legacy_kv_api_still_works(self, memory_provider):

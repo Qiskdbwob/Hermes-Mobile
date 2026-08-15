@@ -223,10 +223,21 @@ class MemoryHarness:
     async def process_turn(self, session_id: str, user_text: str) -> Dict[str, int]:
         """Extract candidates from a user turn and apply the memory policy.
 
-        Returns counts: auto_saved / asked / approved / ignored / duplicates.
-        Never raises: memory extraction must not break the conversation turn.
+        Returns counts: auto_saved / asked / approved / pending / ignored /
+        duplicates. ``pending`` are ASK candidates queued as
+        ``pending_confirmation`` because no interactive confirmation channel
+        exists (headless/gateway) — the user can review them later in the
+        Memory view. Never raises: memory extraction must not break the
+        conversation turn.
         """
-        result = {"auto_saved": 0, "asked": 0, "approved": 0, "ignored": 0, "duplicates": 0}
+        result = {
+            "auto_saved": 0,
+            "asked": 0,
+            "approved": 0,
+            "pending": 0,
+            "ignored": 0,
+            "duplicates": 0,
+        }
         if self.provider is None:
             return result
         candidates = extract_candidates(user_text, session_id)
@@ -244,19 +255,31 @@ class MemoryHarness:
                     result["auto_saved"] += 1
                 elif decision == "ASK":
                     result["asked"] += 1
-                    if await self._ask(candidate):
+                    answer = await self._ask(candidate)
+                    if answer is True:
                         await self._persist(candidate, source_type="user_confirmation")
                         result["approved"] += 1
+                    elif answer is None:
+                        # No confirmation channel: queue for later review
+                        # instead of dropping the candidate silently.
+                        await self._persist_pending(candidate)
+                        result["pending"] += 1
                 else:
                     result["ignored"] += 1
             except Exception as exc:
                 logger.warning("Memory harness failed for candidate: %s", exc)
         return result
 
-    async def _ask(self, candidate: MemoryCandidate) -> bool:
-        """Bounded confirmation: no callback or timeout -> deny (IGNORE)."""
+    async def _ask(self, candidate: MemoryCandidate) -> Optional[bool]:
+        """Bounded confirmation.
+
+        Returns True when the user approves, False when the user denies or the
+        ask failed/timed out (candidate dropped), and None when no
+        confirmation channel exists at all — callers should queue the
+        candidate as ``pending_confirmation`` for later review.
+        """
         if self.ask_callback is None:
-            return False
+            return None
         try:
             return bool(
                 await asyncio.wait_for(self.ask_callback(candidate), timeout=self.ask_timeout)
@@ -267,6 +290,31 @@ class MemoryHarness:
         except Exception as exc:
             logger.warning("Memory confirmation failed: %s", exc)
             return False
+
+    async def _persist_pending(self, candidate: MemoryCandidate) -> str:
+        """Queue an ASK candidate as ``pending_confirmation`` for later review."""
+        memory_id = await self.provider.insert_memory_item(
+            content=candidate.content,
+            memory_type=candidate.memory_type,
+            scope_type=candidate.scope_type,
+            scope_id=candidate.scope_id,
+            status="pending_confirmation",
+            confidence=candidate.confidence,
+            importance=candidate.importance,
+            sensitivity=candidate.sensitivity,
+            source_type=candidate.source_type,
+            source_session_id=candidate.session_id,
+            ttl_days=MEMORY_TTL_DAYS.get("pending_confirmation"),
+        )
+        await self.provider.add_memory_evidence(
+            memory_id,
+            candidate.evidence_type,
+            session_id=candidate.session_id,
+            evidence_text=candidate.evidence_text,
+            confidence=candidate.confidence,
+            verified=0,
+        )
+        return memory_id
 
     async def _persist(self, candidate: MemoryCandidate, source_type: str) -> str:
         ttl = MEMORY_TTL_DAYS.get(candidate.memory_type)

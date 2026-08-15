@@ -352,6 +352,28 @@ class TestSearchSessions:
         finally:
             mp.close()
 
+    async def test_search_sessions_encrypted_finds_match_in_older_message(self, temp_dir):
+        """Bounded-decrypt scans a window of messages, not just the latest one."""
+        from hermes_mobile.core.agent import Message
+
+        mp = MobileMemoryProvider(
+            db_path=temp_dir / "search_enc_window.db",
+            encrypt=True,
+            encryption_key="test-key",
+        )
+        try:
+            await mp.save_conversation(
+                "session-old-match",
+                [
+                    Message.user("Needle buried earlier in the conversation"),
+                    Message.user("Latest message has nothing relevant"),
+                ],
+            )
+            result = await mp.search_sessions("Needle", limit=5)
+            assert any(r["id"] == "session-old-match" for r in result)
+        finally:
+            mp.close()
+
     async def test_search_sessions_encrypted_hits_limit(self, temp_dir):
         """Encrypted search hits limit and breaks (line 369)."""
         from hermes_mobile.core.agent import Message
