@@ -414,6 +414,7 @@ def test_switch_view_builds_only_requested_surface():
 
     app.chat_view = view("chat")
     app.sessions_view = view("sessions")
+    app.browser_view = view("browser")
     app.tools_view = view("tools")
     app.memory_view = view("memory")
     app.skills_view = view("skills")

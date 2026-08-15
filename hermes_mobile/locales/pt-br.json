@@ -16,6 +16,7 @@
     "more": "Mais",
     "messaging": "Mensagens",
     "artifacts": "Workspace",
+    "browser": "Navegador",
     "terminal": "Terminal",
     "kanban": "Kanban"
   },
@@ -196,6 +197,8 @@
     "model_count": "{count} modelos · chave de API {state}",
     "api_saved": "salva",
     "api_required": "necessária",
+    "api_optional": "opcional (local)",
+    "api_optional_hint": "Chave de API opcional — endpoint local {url}",
     "refresh_models": "Atualizar modelos",
     "remote_model_placeholder": "Modelo selecionado pelo backend",
     "remote_authority": "As credenciais e a seleção de modelo pertencem ao perfil Hermes conectado.",

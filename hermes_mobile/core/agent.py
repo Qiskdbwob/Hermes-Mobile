@@ -21,8 +21,11 @@ from hermes_mobile.tools.agent_tools import (
 )
 from hermes_mobile.tools.browser_session import (
     browser_back_tool,
+    browser_click_selector_tool,
     browser_click_tool,
     browser_get_images_tool,
+    browser_scroll_tool,
+    browser_type_tool,
 )
 from hermes_mobile.tools.desktop_tools import (
     cronjob_tool,
@@ -203,13 +206,17 @@ class MobileAgent:
         api_key = self._get_api_key()
         base_url = self._get_base_url()
 
-        if not api_key:
+        keyless = profile is not None and not profile.requires_api_key
+        if not api_key and not keyless:
             self._client = None
             self._client_error = (
                 f"No API key configured for provider '{self.provider}'. "
                 "Open Settings and add the provider API key."
             )
             return
+        if not api_key:
+            # Keyless local runtimes (Ollama) accept any non-empty token.
+            api_key = "ollama"
 
         self._client = AsyncOpenAI(
             api_key=api_key,
@@ -261,6 +268,13 @@ class MobileAgent:
         """Resolve the configured provider, including registry aliases."""
         return get_provider_profile(self.provider)
 
+    @property
+    def browser_session(self):
+        """The shared browsing session (module singleton, one tab per app)."""
+        from hermes_mobile.tools.browser_session import _session
+
+        return _session
+
     def _get_api_key(self) -> str:
         """Resolve the API key from persisted settings, then profile env vars."""
         profile = self._get_provider_profile()
@@ -285,7 +299,7 @@ class MobileAgent:
             if persisted:
                 return persisted
 
-        if profile:
+        if profile and profile.requires_api_key:
             for env_var in profile.env_vars:
                 value = os.environ.get(env_var, "").strip()
                 if value:
@@ -302,7 +316,7 @@ class MobileAgent:
         """Resolve the provider endpoint from its declarative profile."""
         profile = self._get_provider_profile()
         if profile and profile.base_url:
-            return profile.base_url
+            return profile.resolve_base_url()
         return "https://openrouter.ai/api/v1"
 
     def add_message(self, message: Message):
@@ -598,6 +612,8 @@ class MobileAgent:
             "browser_snapshot": self._tool_browser_snapshot,
             "browser_back": self._tool_browser_back,
             "browser_click": self._tool_browser_click,
+            "browser_scroll": self._tool_browser_scroll,
+            "browser_type": self._tool_browser_type,
             "browser_get_images": self._tool_browser_get_images,
             "vision_analyze": self._tool_vision_analyze,
             "image_generate": self._tool_image_generate,
@@ -835,9 +851,21 @@ class MobileAgent:
         """Go back to the previous page."""
         return await browser_back_tool()
 
-    async def _tool_browser_click(self, href: str) -> Dict[str, Any]:
-        """Click a link by href."""
-        return await browser_click_tool(href)
+    async def _tool_browser_click(self, href: str = "", selector: str = "") -> Dict[str, Any]:
+        """Click a link by href, or an element by CSS selector (WebView)."""
+        if selector:
+            return await browser_click_selector_tool(selector)
+        return await browser_click_tool(href or "")
+
+    async def _tool_browser_scroll(
+        self, direction: str = "down", amount: int = 600
+    ) -> Dict[str, Any]:
+        """Scroll the WebView page (up/down/top/bottom)."""
+        return await browser_scroll_tool(direction, amount)
+
+    async def _tool_browser_type(self, selector: str, text: str) -> Dict[str, Any]:
+        """Type text into a form field (WebView) by CSS selector."""
+        return await browser_type_tool(selector, text)
 
     async def _tool_browser_get_images(self) -> Dict[str, Any]:
         """List images on the current page."""
@@ -1222,13 +1250,52 @@ class MobileAgent:
                     "type": "function",
                     "function": {
                         "name": "browser_click",
-                        "description": "Click a link by href (relative links resolve against the current page)",
+                        "description": "Click a link by href, or an element by CSS selector (WebView browser only)",
                         "parameters": {
                             "type": "object",
                             "properties": {
                                 "href": {"type": "string", "description": "Link href to click"},
+                                "selector": {
+                                    "type": "string",
+                                    "description": "CSS selector to click (requires the WebView browser)",
+                                },
                             },
-                            "required": ["href"],
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "browser_scroll",
+                        "description": "Scroll the WebView page (requires the Browser view / WebView browser)",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "direction": {
+                                    "type": "string",
+                                    "enum": ["up", "down", "top", "bottom"],
+                                    "default": "down",
+                                },
+                                "amount": {"type": "integer", "default": 600},
+                            },
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "browser_type",
+                        "description": "Type text into a form field by CSS selector (requires the WebView browser)",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "selector": {
+                                    "type": "string",
+                                    "description": "CSS selector of the input/textarea",
+                                },
+                                "text": {"type": "string", "description": "Text to type"},
+                            },
+                            "required": ["selector", "text"],
                         },
                     },
                 },

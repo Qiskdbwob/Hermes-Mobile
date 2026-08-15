@@ -28,6 +28,21 @@ class BrowserSession:
         self._client: Optional[httpx.AsyncClient] = None
         self._history: List[str] = []
         self._current_url: Optional[str] = None
+        # Optional WebView automation engine (see webview_engine.py). When a
+        # WebView is mounted (Browser view), navigation and interaction use the
+        # real JS-capable browser; otherwise the static engine is used.
+        self.webview: Optional[Any] = None
+
+    def attach_webview(self, engine: Any) -> None:
+        """Attach a mounted WebView engine (Browser view)."""
+        self.webview = engine
+
+    def detach_webview(self) -> None:
+        """Drop the WebView engine and go back to the static engine."""
+        self.webview = None
+
+    def _webview_active(self) -> bool:
+        return self.webview is not None and getattr(self.webview, "is_mounted", False)
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -48,6 +63,9 @@ class BrowserSession:
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
 
+        if self._webview_active():
+            return await self._navigate_webview(url)
+
         client = await self._get_client()
         response, error = await _safe_get(client, url)
         if error:
@@ -59,8 +77,89 @@ class BrowserSession:
         self._current_url = str(response.url)
         return self._snapshot(response)
 
+    async def _navigate_webview(self, url: str) -> Dict[str, Any]:
+        """Navigate inside the mounted WebView and extract the rendered page.
+
+        Falls back to the static engine when the WebView returns no usable text
+        (e.g. the page blocked JS evaluation or failed to render).
+        """
+        result = await self.webview.navigate(url)
+        if not result.get("ok"):
+            return {"url": url, "error": result.get("error", "WebView navigation failed")}
+        if self._current_url:
+            self._history.append(self._current_url)
+        self._current_url = result.get("url") or url
+
+        text = await self.webview.page_text(MAX_CONTENT)
+        title = str(result.get("title") or "")
+        if not text:
+            # WebView rendered nothing usable: fall back to the static engine.
+            client = await self._get_client()
+            response, error = await _safe_get(client, url)
+            if not error and response is not None:
+                snapshot = self._snapshot(response)
+                snapshot["webview"] = False
+                return snapshot
+            return {
+                "url": self._current_url,
+                "title": title,
+                "content": "",
+                "error": "Page rendered no readable text",
+            }
+
+        links = await self._webview_links()
+        return {
+            "url": self._current_url,
+            "title": title,
+            "status_code": 200,
+            "content": text,
+            "links": links,
+            "content_length": len(text),
+            "webview": True,
+        }
+
+    async def _webview_links(self, limit: int = 20) -> List[Dict[str, str]]:
+        js = (
+            "JSON.stringify(Array.from(document.querySelectorAll('a[href]'))"
+            ".filter(a => !a.href.startsWith('#') && !a.href.startsWith('javascript:'))"
+            ".slice(0, " + str(limit) + ").map(a => ({text: "
+            "(a.innerText || a.textContent || '').trim().slice(0,80), href: a.href})))"
+        )
+        raw = await self.webview.evaluate(js)
+        if not raw:
+            return []
+        try:
+            import json
+
+            items = json.loads(str(raw))
+        except Exception:
+            return []
+        return [
+            {"text": str(item.get("text") or ""), "href": str(item.get("href") or "")}
+            for item in items
+            if isinstance(item, dict)
+        ][:limit]
+
     async def back(self) -> Dict[str, Any]:
         """Navigate to the previous page in history."""
+        if self._webview_active() and self.webview:
+            if await self.webview.back():
+                current = await self.webview._safe("get_current_url", default=None)
+                if current and (not self._history or self._history[-1] != current):
+                    self._history.append(current)
+                self._current_url = current or self._current_url
+                text = await self.webview.page_text(MAX_CONTENT)
+                title = await self.webview._safe("get_title", default="")
+                return {
+                    "url": self._current_url,
+                    "title": str(title or ""),
+                    "status_code": 200,
+                    "content": text,
+                    "content_length": len(text),
+                    "webview": True,
+                }
+            return {"error": "WebView has no back history"}
+
         if not self._history:
             return {"error": "No history to go back to"}
         url = self._history.pop()
@@ -136,6 +235,36 @@ class BrowserSession:
             "content_length": len(text),
         }
 
+    async def scroll(self, direction: str = "down", amount: int = 600) -> Dict[str, Any]:
+        """Scroll the active WebView (static engine has no scrolling)."""
+        if not self._webview_active():
+            return {
+                "error": "WebView browser is not active — open the Browser view to enable "
+                "real web automation (scroll, forms, JS pages)",
+            }
+        ok = await self.webview.scroll(direction, amount)
+        return {"ok": ok, "direction": direction, "amount": amount}
+
+    async def type_selector(self, selector: str, text: str) -> Dict[str, Any]:
+        """Type into a form field via the active WebView."""
+        if not self._webview_active():
+            return {
+                "error": "WebView browser is not active — open the Browser view to enable "
+                "real web automation (scroll, forms, JS pages)",
+            }
+        ok = await self.webview.type_selector(selector, text)
+        return {"ok": ok, "selector": selector, "typed": len(str(text))}
+
+    async def click_selector(self, selector: str) -> Dict[str, Any]:
+        """Click an element by CSS selector via the active WebView."""
+        if not self._webview_active():
+            return {
+                "error": "WebView browser is not active — open the Browser view to enable "
+                "real web automation (scroll, forms, JS pages)",
+            }
+        ok = await self.webview.click_selector(selector)
+        return {"ok": ok, "selector": selector}
+
     async def close(self) -> None:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
@@ -159,3 +288,18 @@ async def browser_click_tool(href: str) -> Dict[str, Any]:
 async def browser_get_images_tool() -> Dict[str, Any]:
     """List images on the current page."""
     return await _session.get_images()
+
+
+async def browser_scroll_tool(direction: str = "down", amount: int = 600) -> Dict[str, Any]:
+    """Scroll the WebView page (up/down/top/bottom)."""
+    return await _session.scroll(direction, amount)
+
+
+async def browser_type_tool(selector: str, text: str) -> Dict[str, Any]:
+    """Type text into a form field (WebView) by CSS selector."""
+    return await _session.type_selector(selector, text)
+
+
+async def browser_click_selector_tool(selector: str) -> Dict[str, Any]:
+    """Click an element by CSS selector (WebView)."""
+    return await _session.click_selector(selector)

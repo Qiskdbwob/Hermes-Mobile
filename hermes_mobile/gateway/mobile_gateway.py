@@ -679,7 +679,7 @@ class GatewayManager:
         if not self.pairing_manager.is_user_authorized(platform, user_id):
             # Request pairing
             code = self.pairing_manager.request_pairing(
-                platform, user_id, metadata.get("user_name", "Unknown")
+                platform, user_id, (metadata or {}).get("user_name", "Unknown")
             )
             if code:
                 await self._send_pairing_message(platform, chat_id, code)

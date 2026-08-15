@@ -500,6 +500,7 @@ class SettingsView:
             return self._build_remote_provider_controls()
         profile = get_provider_profile(self.draft.default_provider)
         display = profile.display_name if profile else self.draft.default_provider
+        keyless = profile is not None and not profile.requires_api_key
         key = self._draft_key(self.draft.default_provider)
         status = self.model_error or (
             t("settings.model_refreshing")
@@ -507,15 +508,21 @@ class SettingsView:
             else t(
                 "settings.model_count",
                 count=len(self._current_models()),
-                state=t("settings.api_saved") if key else t("settings.api_required"),
+                state=t("settings.api_saved")
+                if key
+                else (t("settings.api_optional") if keyless else t("settings.api_required")),
             )
         )
         provider = self._build_provider_dropdown()
         model = self._build_model_dropdown()
+        # The key field is always present: even keyless runtimes (Ollama) may
+        # sit behind a gateway that requires a token, so the user must be able
+        # to type one. For keyless providers it is optional and the endpoint is
+        # shown as a hint.
         api_key = self._build_api_key_field(display, self.draft.default_provider)
         for control in (provider, model, api_key):
             control.expand = True
-        return [
+        rows = [
             ft.Row([provider], spacing=0),
             ft.Row([model], spacing=0),
             ft.Row([api_key], spacing=0),
@@ -533,6 +540,22 @@ class SettingsView:
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
         ]
+        if keyless:
+            url = profile.resolve_base_url() if profile else ""
+            rows.insert(
+                3,
+                ft.Row(
+                    [
+                        ft.Text(
+                            t("settings.api_optional_hint", url=url),
+                            size=11,
+                            color=ft.Colors.OUTLINE,
+                        )
+                    ],
+                    spacing=0,
+                ),
+            )
+        return rows
 
     def _build_remote_provider_controls(self) -> list[ft.Control]:
         rows = [row for row in self.remote_providers if isinstance(row, dict)]

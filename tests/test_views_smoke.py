@@ -17,6 +17,7 @@ from hermes_mobile.core.agent import Message
 from hermes_mobile.memory.provider import MobileMemoryProvider
 from hermes_mobile.skills.manager import MobileSkillManager
 from hermes_mobile.ui.artifacts_view import ArtifactsView
+from hermes_mobile.ui.browser_view import BrowserView
 from hermes_mobile.ui.chat_view import ChatView
 from hermes_mobile.ui.cron_view import CronView
 from hermes_mobile.ui.gateway_view import GatewayView
@@ -108,6 +109,7 @@ VIEWS = (
     ("kanban", KanbanView),
     ("sessions", SessionsView),
     ("artifacts", ArtifactsView),
+    ("browser", BrowserView),
 )
 
 
@@ -139,6 +141,7 @@ def test_switch_view_builds_every_destination(app):
 
     # Wire every view instance like HermesMobileApp._initialize_components.
     hermes.chat_view = ChatView(hermes)
+    hermes.browser_view = BrowserView(hermes)
     hermes.settings_view = SettingsView(hermes)
     hermes.skills_view = SkillsView(hermes)
     hermes.memory_view = MemoryView(hermes)
@@ -154,6 +157,7 @@ def test_switch_view_builds_every_destination(app):
     for view_name in (
         "chat",
         "sessions",
+        "browser",
         "skills",
         "messaging",
         "artifacts",

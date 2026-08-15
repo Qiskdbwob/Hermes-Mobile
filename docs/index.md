@@ -33,6 +33,7 @@ Hermes Mobile puts a full AI agent on your phone. It's not a ChatGPT wrapper —
 - [Hermes Remote](hermes-remote) — connect to a `hermes serve` backend
 - [Building from Source](building) — compile your own APK
 - [Architecture](ARCHITECTURE) — module map and end-to-end request flows
+- [Memory & harness schema](memory-harness-schema) — current SQL schema, agent harness, Claude prompt for a better design, comparison vs hermes-agent (Nous)
 - [Screenshots](screenshots) — real APK screenshots, no mockups
 
 ---
@@ -40,10 +41,10 @@ Hermes Mobile puts a full AI agent on your phone. It's not a ChatGPT wrapper —
 ## Highlights
 
 - **41 tool handlers** with zero schema divergence — every tool the model can call has a real implementation
-- **7 runtime-switchable providers** with encrypted credential store
+- **8 runtime-switchable providers** (incl. local Ollama) with encrypted credential store
 - **Transactional Settings** — changes stay in draft until you explicitly save. No accidental misconfiguration.
 - **Hermes Remote** — same JSON-RPC protocol as Hermes Desktop: create sessions, resume conversations, run tools on the backend
 - **Offline support** — works with Ollama for local models
-- **803 tests** on Python 3.12 and Python 3.9
+- **911 tests** on Python 3.12 and Python 3.9
 
 [View on GitHub →](https://github.com/plcunha/Hermes-Mobile)

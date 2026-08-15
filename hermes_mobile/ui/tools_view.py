@@ -33,13 +33,18 @@ class ToolsView:
         dark = self.app.dark_mode
         toolsets = get_all_toolsets()
         categories = list_toolsets_by_category()
+        implemented = self._implemented_names()
+        current_names = self._current_tool_names()
 
         return ft.Column(
             [
                 page_header(
                     dark,
                     "Tools",
-                    f"{len(toolsets)} toolsets · {sum(len(get_toolset(name)) for name in toolsets)} resolved tools",
+                    (
+                        f"{len(toolsets)} toolsets · {len(implemented)} implementable tools · "
+                        f"{len(current_names)} active"
+                    ),
                     ft.IconButton(
                         icon=ft.Icons.REFRESH,
                         icon_size=18,
@@ -47,13 +52,58 @@ class ToolsView:
                         on_click=lambda e: self._refresh(),
                     ),
                 ),
-                ft.Container(content=self._build_toolsets_list(categories), expand=True),
+                ft.Container(
+                    content=self._build_toolsets_list(categories, implemented, current_names),
+                    expand=True,
+                ),
             ],
             expand=True,
             spacing=0,
         )
 
-    def _build_toolsets_list(self, categories: dict) -> ft.Control:
+    def _implemented_names(self) -> set:
+        """Tool names the agent can actually execute (built-ins + skills).
+
+        Toolsets may advertise desktop-only schemas (x_search, browser_scroll,
+        computer_use, ...) that have no handler in this mobile build; those must
+        never be added to the model's tool list.
+        """
+        agent = self.agent
+        names = set()
+        if agent is None:
+            return names
+
+        builtins = getattr(agent, "_builtin_tools", None)
+        if builtins:
+            names.update(name for name in builtins if name)
+
+        skill_manager = getattr(agent, "skill_manager", None)
+        if skill_manager is not None:
+            try:
+                for skill in skill_manager.get_all_skills() or []:
+                    skill_name = getattr(skill, "name", "")
+                    if skill_name:
+                        names.add(skill_name)
+            except Exception:
+                pass
+        return names
+
+    def _current_tool_names(self) -> set:
+        """Names of the schemas currently advertised to the model."""
+        agent = self.agent
+        names = set()
+        if agent is None:
+            return names
+        for schema in getattr(agent, "tools", None) or []:
+            fn = schema.get("function", {}) if isinstance(schema, dict) else {}
+            name = fn.get("name") if isinstance(fn, dict) else None
+            if name:
+                names.add(name)
+        return names
+
+    def _build_toolsets_list(
+        self, categories: dict, implemented: set, current_names: set
+    ) -> ft.Control:
         """Build the toolsets list grouped by category"""
         controls = []
 
@@ -68,7 +118,7 @@ class ToolsView:
 
             for name in sorted(toolset_names):
                 toolset = get_all_toolsets().get(name, {})
-                controls.append(self._build_toolset_card(name, toolset))
+                controls.append(self._build_toolset_card(name, toolset, implemented, current_names))
 
             controls.append(ft.Divider(height=16))
 
@@ -78,15 +128,37 @@ class ToolsView:
             spacing=8,
         )
 
-    def _build_toolset_card(self, name: str, toolset: dict) -> ft.Control:
-        """Build a toolset card"""
+    def _build_toolset_card(
+        self,
+        name: str,
+        toolset: dict,
+        implemented: set,
+        current_names: set,
+    ) -> ft.Control:
+        """Build a toolset card with an on/off switch reflecting active state."""
         description = toolset.get("description", "")
 
-        # Get resolved tools
-        resolved_tools = get_toolset(name)
-        tool_count = len(resolved_tools)
+        resolved = get_toolset(name)
+        available = sorted(tool for tool in resolved if tool in implemented)
+        dead = [tool for tool in resolved if tool not in implemented]
+        enabled = bool(available) and all(tool in current_names for tool in available)
+        partial = (
+            bool(available) and not enabled and any(tool in current_names for tool in available)
+        )
+
+        if dead:
+            count_label = f"{len(available)}/{len(resolved)}"
+        else:
+            count_label = str(len(available))
 
         c = mode_colors(self.app.dark_mode)
+        switch = ft.Switch(
+            value=enabled,
+            on_change=lambda e, n=name: self._toggle_toolset(n, bool(e.control.value)),
+            tooltip=(
+                "Toolset active" if enabled else ("Partially active" if partial else "Toolset off")
+            ),
+        )
         return ft.Container(
             content=flat_list_row(
                 self.app.dark_mode,
@@ -96,17 +168,18 @@ class ToolsView:
                 trailing=ft.Row(
                     [
                         ft.Text(
-                            str(tool_count),
+                            count_label,
                             size=10,
-                            color=c["muted_foreground"],
+                            color=(c["muted_foreground"] if not dead else ft.Colors.ORANGE),
                             font_family=MONO_FONT,
+                            tooltip=(
+                                f"{len(dead)} tools have no implementation in this "
+                                "build (desktop-only)"
+                                if dead
+                                else None
+                            ),
                         ),
-                        ft.IconButton(
-                            icon=ft.Icons.ADD,
-                            icon_size=17,
-                            tooltip="Enable toolset",
-                            on_click=lambda e, n=name: self._enable_toolset(n),
-                        ),
+                        switch,
                     ],
                     spacing=1,
                     tight=True,
@@ -116,10 +189,54 @@ class ToolsView:
             border=ft.Border.only(bottom=ft.BorderSide(1, c["border"])),
         )
 
+    def _toggle_toolset(self, name: str, enable: bool):
+        """Enable or disable a toolset for the agent.
+
+        Only tools with a real handler are ever added to the model's tool list;
+        desktop-only schemas (x_search, browser_scroll, ...) are skipped.
+        """
+        agent = self.agent
+        if agent is None or not hasattr(agent, "set_tools"):
+            snack(self.page, "Agent not available", error=True)
+            return
+
+        available = [tool for tool in get_toolset(name) if tool in self._implemented_names()]
+        current = list(getattr(agent, "tools", None) or [])
+        current_names = {s.get("function", {}).get("name") for s in current if isinstance(s, dict)}
+
+        if enable:
+            added = 0
+            for schema in get_tool_schemas(available):
+                fn = schema.get("function", {})
+                tool_name = fn.get("name")
+                if tool_name and tool_name not in current_names:
+                    current.append(schema)
+                    current_names.add(tool_name)
+                    added += 1
+            agent.set_tools(current)
+            snack(
+                self.page,
+                f"Enabled toolset: {name} ({added} tools added, {len(available) - added} already active)",
+            )
+        else:
+            removed = 0
+            kept = []
+            for schema in current:
+                fn = schema.get("function", {})
+                if isinstance(fn, dict) and fn.get("name") in available:
+                    removed += 1
+                else:
+                    kept.append(schema)
+            agent.set_tools(kept)
+            snack(self.page, f"Disabled toolset: {name} ({removed} tools removed)")
+        self._refresh()
+
     def _show_toolset_details(self, name: str):
         """Show toolset details dialog"""
         toolset = get_all_toolsets().get(name, {})
         resolved_tools = get_toolset(name)
+        implemented = self._implemented_names()
+        available = sorted(tool for tool in resolved_tools if tool in implemented)
 
         content = ft.Column(
             [
@@ -148,13 +265,16 @@ class ToolsView:
                     spacing=2,
                 ),
                 ft.Divider(),
-                ft.Text(f"Resolved Tools ({len(resolved_tools)}):", weight=ft.FontWeight.BOLD),
+                ft.Text(
+                    f"Implementable Tools ({len(available)}):",
+                    weight=ft.FontWeight.BOLD,
+                ),
                 ft.Column(
                     [
                         ft.Text(
                             f"  • {tool}", size=11, font_family="monospace", color=ft.Colors.OUTLINE
                         )
-                        for tool in sorted(resolved_tools)
+                        for tool in sorted(available)
                     ],
                     spacing=1,
                     scroll=ft.ScrollMode.AUTO,
@@ -171,23 +291,6 @@ class ToolsView:
             actions=[ft.TextButton("Close", on_click=lambda e: close_dialog(self.page, dialog))],
         )
         open_dialog(self.page, dialog)
-
-    def _enable_toolset(self, name: str):
-        """Enable a toolset for the agent"""
-        # Get resolved tools and update agent
-        resolved_tools = get_toolset(name)
-        schemas = get_tool_schemas(list(resolved_tools))
-
-        # Add to agent's existing tools
-        current_tools = self.agent.tools or []
-        tool_names = {t["function"]["name"] for t in current_tools}
-
-        for schema in schemas:
-            if schema["function"]["name"] not in tool_names:
-                current_tools.append(schema)
-
-        self.agent.set_tools(current_tools)
-        snack(self.page, f"Enabled toolset: {name} ({len(resolved_tools)} tools)")
 
     def _refresh(self):
         """Refresh the view"""

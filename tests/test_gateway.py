@@ -619,6 +619,39 @@ class TestGatewayManager:
 
     @patch("hermes_mobile.gateway.mobile_gateway.create_mobile_agent")
     @patch("hermes_mobile.gateway.mobile_gateway.MobileMemoryProvider")
+    async def test_telegram_adapter_wires_into_handle_message(self, mock_memory, mock_agent):
+        """Regression: the adapter must unpack update fields into the manager's
+        positional signature. Previously it passed a single dict, so every
+        Telegram message died with TypeError."""
+        import hermes_mobile.gateway.mobile_gateway as gw
+
+        gw._pairing_manager = None
+        manager = GatewayManager(GatewayConfig(enabled=False))
+        manager.pairing_manager = get_pairing_manager()
+        mock_adapter = AsyncMock()
+        mock_adapter.send_message = AsyncMock(return_value="msg_1")
+        manager.adapters = {"telegram": mock_adapter}
+
+        from hermes_mobile.gateway.telegram_adapter import TelegramAdapter
+
+        tg = TelegramAdapter(token="test:token", on_message=manager.handle_message)
+        update = {
+            "update_id": 1,
+            "message": {
+                "message_id": 10,
+                "text": "hello",
+                "chat": {"id": 123, "type": "private"},
+                "from": {"id": 456, "first_name": "John"},
+            },
+        }
+
+        await tg._process_update(update)
+
+        # Unauthorized user -> pairing code message sent through the adapter.
+        assert mock_adapter.send_message.called
+
+    @patch("hermes_mobile.gateway.mobile_gateway.create_mobile_agent")
+    @patch("hermes_mobile.gateway.mobile_gateway.MobileMemoryProvider")
     def test_send_pairing_message_no_adapter(self, mock_memory, mock_agent):
         cfg = GatewayConfig(enabled=False)
         manager = GatewayManager(cfg)

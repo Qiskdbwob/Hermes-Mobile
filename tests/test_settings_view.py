@@ -153,6 +153,28 @@ def test_local_settings_are_registry_driven_and_keys_use_encrypted_store(tmp_pat
     assert any(value.lower() == "petdex" for value in texts(view.build()))
 
 
+def test_keyless_provider_keeps_optional_api_key_field_and_shows_endpoint(tmp_path):
+    app = make_app(tmp_path)
+    view = SettingsView(app)
+    view.draft.default_provider = "ollama"
+
+    controls = view._build_provider_controls()
+
+    # The key field must stay available (optional) so the user can type a token
+    # when a local gateway requires one.
+    password_fields = [
+        item
+        for control in controls
+        for item in walk(control)
+        if isinstance(item, ft.TextField) and item.password
+    ]
+    assert len(password_fields) == 1
+    assert any(
+        "http://localhost:11434/v1" in label for control in controls for label in texts(control)
+    )
+    assert any("optional" in label.lower() for control in controls for label in texts(control))
+
+
 @pytest.mark.asyncio
 async def test_model_inventory_refresh_never_rewrites_configured_model(tmp_path, monkeypatch):
     app = make_app(tmp_path)

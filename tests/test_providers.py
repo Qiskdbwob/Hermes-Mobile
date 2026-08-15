@@ -130,9 +130,18 @@ class TestBuiltinProfiles:
         assert "xai" in names
         assert "ollama" in names
 
-    def test_local_provider_catalog_excludes_unimplemented_routes(self):
+    def test_local_provider_catalog_includes_ollama(self):
         names = [profile.name for profile in list_local_providers()]
-        assert names == ["openrouter", "openai", "google", "groq", "together", "deepseek", "xai"]
+        assert names == [
+            "openrouter",
+            "openai",
+            "google",
+            "groq",
+            "together",
+            "deepseek",
+            "xai",
+            "ollama",
+        ]
 
 
 @pytest.mark.asyncio
@@ -214,6 +223,43 @@ class TestOllamaProfileHostname:
     def test_ollama_hostname(self):
         p = OllamaProfile()
         assert p.get_hostname() == "ollama-local"
+
+
+class TestOllamaOpenAICompat:
+    def test_ollama_is_keyless(self):
+        p = OllamaProfile()
+        assert p.api_mode == "chat_completions"
+        assert p.auth_type == "none"
+        assert p.requires_api_key is False
+
+    def test_ollama_resolve_urls_default(self, monkeypatch):
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        p = OllamaProfile()
+        assert p.resolve_base_url() == "http://localhost:11434/v1"
+        assert p.resolve_models_url() == "http://localhost:11434/api/tags"
+
+    def test_ollama_resolve_urls_honors_host_env(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_HOST", "http://192.168.1.50:11434")
+        p = OllamaProfile()
+        assert p.resolve_base_url() == "http://192.168.1.50:11434/v1"
+        assert p.resolve_models_url() == "http://192.168.1.50:11434/api/tags"
+
+    async def test_fetch_ollama_models_uses_resolved_url(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_HOST", "http://192.168.1.50:11434")
+        profile = OllamaProfile()
+        captured = {}
+
+        async def handler(request):
+            captured["url"] = str(request.url)
+            return httpx.Response(200, json={"models": [{"name": "llama3.1:8b"}]})
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            models = await fetch_provider_models(profile, "", client=client)
+
+        assert models == ["llama3.1:8b"]
+        assert "192.168.1.50" in captured["url"]
+        assert "/api/tags" in captured["url"]
 
 
 class TestRegisterProvider:

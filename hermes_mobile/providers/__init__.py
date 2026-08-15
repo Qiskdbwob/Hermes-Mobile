@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -40,7 +41,8 @@ class ProviderProfile:
     env_vars: Tuple[str, ...] = ()
     base_url: str = ""
     models_url: str = ""
-    auth_type: str = "api_key"  # api_key|oauth_device_code|oauth_external|copilot|aws_sdk
+    auth_type: str = "api_key"  # api_key|oauth_device_code|oauth_external|copilot|aws_sdk|none
+    requires_api_key: bool = True
     supports_health_check: bool = True
 
     # ── Vision support ────────────────────────────────────────
@@ -70,6 +72,14 @@ class ProviderProfile:
 
             return urlparse(self.base_url).hostname or ""
         return ""
+
+    def resolve_base_url(self) -> str:
+        """Return the effective API base URL. Subclasses may override to honor env."""
+        return self.base_url
+
+    def resolve_models_url(self) -> str:
+        """Return the effective model-catalog URL. Subclasses may override to honor env."""
+        return self.models_url
 
     def prepare_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Provider-specific message preprocessing. Default: pass-through."""
@@ -283,16 +293,19 @@ class XAIProfile(ProviderProfile):
 
 
 class OllamaProfile(ProviderProfile):
+    """Local Ollama via its OpenAI-compatible endpoint (no API key)."""
+
     def __init__(self):
         super().__init__(
             name="ollama",
             display_name="Ollama (Local)",
-            description="Local models via Ollama",
+            description="Local models via Ollama (OpenAI-compatible endpoint)",
             signup_url="https://ollama.com/",
             env_vars=("OLLAMA_HOST",),
             base_url="http://localhost:11434/v1",
             models_url="http://localhost:11434/api/tags",
-            auth_type="api_key",
+            auth_type="none",
+            requires_api_key=False,
             supports_vision=True,
             fallback_models=(
                 "llama3.1:70b",
@@ -305,6 +318,23 @@ class OllamaProfile(ProviderProfile):
 
     def get_hostname(self) -> str:
         return "ollama-local"
+
+    @staticmethod
+    def _host_from_env() -> str:
+        """OLLAMA_HOST (http://host:port) overrides the default local endpoint."""
+        return os.environ.get("OLLAMA_HOST", "").strip().rstrip("/")
+
+    def resolve_base_url(self) -> str:
+        host = self._host_from_env()
+        if host:
+            return f"{host}/v1"
+        return self.base_url
+
+    def resolve_models_url(self) -> str:
+        host = self._host_from_env()
+        if host:
+            return f"{host}/api/tags"
+        return self.models_url
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -349,11 +379,7 @@ def list_providers() -> List[ProviderProfile]:
 
 def list_local_providers() -> List[ProviderProfile]:
     """Return only providers this Android runtime can call honestly."""
-    return [
-        profile
-        for profile in list_providers()
-        if profile.api_mode == "chat_completions" and profile.name != "ollama"
-    ]
+    return [profile for profile in list_providers() if profile.api_mode == "chat_completions"]
 
 
 async def fetch_provider_models(
@@ -365,7 +391,8 @@ async def fetch_provider_models(
     """Fetch and normalize the provider's current model catalog."""
     import httpx
 
-    if not profile.models_url:
+    models_url = profile.resolve_models_url()
+    if not models_url:
         return list(profile.fallback_models)
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=20.0)
@@ -377,7 +404,7 @@ async def fetch_provider_models(
     elif api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     try:
-        response = await http.get(profile.models_url, headers=headers, params=params)
+        response = await http.get(models_url, headers=headers, params=params)
         response.raise_for_status()
         payload = response.json()
     finally:

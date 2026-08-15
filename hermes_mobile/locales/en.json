@@ -16,6 +16,7 @@
     "more": "More",
     "messaging": "Messaging",
     "artifacts": "Workspace",
+    "browser": "Browser",
     "terminal": "Terminal",
     "kanban": "Kanban"
   },
@@ -196,6 +197,8 @@
     "model_count": "{count} models · API key {state}",
     "api_saved": "saved",
     "api_required": "required",
+    "api_optional": "optional (local)",
+    "api_optional_hint": "API key optional — local endpoint {url}",
     "refresh_models": "Refresh models",
     "remote_model_placeholder": "Backend selected model",
     "remote_authority": "Provider credentials and model selection are owned by the connected Hermes profile.",

@@ -118,6 +118,8 @@ class TelegramAdapter:
             except Exception as e:
                 last_error = e
                 logger.warning("Telegram API error: %s", e)
+
+            if attempt < 2:
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
 
@@ -137,6 +139,24 @@ class TelegramAdapter:
                     for update in updates["result"]:
                         self._offset = update["update_id"] + 1
                         await self._process_update(update)
+                else:
+                    error_code = updates.get("error_code")
+                    if error_code == 409:
+                        # Another long-poll lease holds this bot token: a second
+                        # app instance, a leftover process, or a webhook that was
+                        # never deleted. Keep polling after a longer backoff so a
+                        # fixed/restarted instance recovers on its own.
+                        logger.error(
+                            "Telegram 409 Conflict on getUpdates: another instance "
+                            "is polling this bot (or a webhook is still set). Stop "
+                            "the other instance / call deleteWebhook, then restart "
+                            "the gateway."
+                        )
+                        await asyncio.sleep(MAX_RETRY_DELAY)
+                    else:
+                        # Rate limited (429), transient API errors: back off and
+                        # retry instead of hot-looping.
+                        await asyncio.sleep(RETRY_DELAY)
 
             except asyncio.CancelledError:
                 break
@@ -175,6 +195,17 @@ class TelegramAdapter:
 
         if self.on_message:
             try:
-                await self.on_message(formatted)
+                await self.on_message(
+                    formatted["platform"],
+                    formatted["chat_id"],
+                    formatted["user_id"],
+                    formatted["text"],
+                    {
+                        "message_id": formatted.get("message_id"),
+                        "chat_type": formatted.get("chat_type", "private"),
+                        "user_name": formatted.get("user_name", "Unknown"),
+                        "is_edit": formatted.get("is_edit", False),
+                    },
+                )
             except Exception as e:
                 logger.error("on_message handler error: %s", e)

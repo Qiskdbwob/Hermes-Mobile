@@ -305,6 +305,36 @@ class TestMobileAgent:
         assert agent._get_base_url() == "https://api.deepseek.com/v1"
         assert agent._client is not None
 
+    def test_ollama_builds_client_without_api_key(self, monkeypatch):
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        agent = MobileAgent(provider="ollama")
+
+        assert agent._get_api_key() == ""
+        assert agent._client is not None
+        assert agent._client_error is None
+        assert agent._get_base_url() == "http://localhost:11434/v1"
+
+    def test_ollama_host_env_drives_endpoint(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_HOST", "http://192.168.1.50:11434")
+        agent = MobileAgent(provider="ollama")
+
+        assert agent._get_base_url() == "http://192.168.1.50:11434/v1"
+        assert agent._client is not None
+
+    def test_ollama_uses_optional_key_from_secret_store(self, tmp_path):
+        """A token typed in Settings for a keyless provider is actually used."""
+        agent = MobileAgent(provider="ollama")
+        agent.settings.data_dir = str(tmp_path)
+
+        from hermes_mobile.remote.secrets import ProviderSecretStore
+
+        ProviderSecretStore(tmp_path).save_key("ollama", "sk-local-gateway")
+
+        assert agent._get_api_key() == "sk-local-gateway"
+        agent._init_client()
+        assert agent._client is not None
+        assert agent._client_error is None
+
     def test_non_openai_compatible_provider_fails_explicitly(self):
         agent = MobileAgent(provider="anthropic")
 
@@ -552,6 +582,49 @@ class TestMobileAgent:
         result = await agent._tool_browser_snapshot("https://example.com")
         assert result == {"snapshot": "textual content"}
         mock_snap.assert_called_once_with("https://example.com")
+
+    @patch("hermes_mobile.core.agent.browser_click_selector_tool")
+    async def test_tool_browser_click_selector(self, mock_click):
+        mock_click.return_value = {"ok": True}
+        agent = MobileAgent()
+        result = await agent._tool_browser_click(selector="button#go")
+        assert result == {"ok": True}
+        mock_click.assert_called_once_with("button#go")
+
+    @patch("hermes_mobile.core.agent.browser_click_tool")
+    async def test_tool_browser_click_href(self, mock_click):
+        mock_click.return_value = {"ok": True}
+        agent = MobileAgent()
+        result = await agent._tool_browser_click(href="/b")
+        assert result == {"ok": True}
+        mock_click.assert_called_once_with("/b")
+
+    @patch("hermes_mobile.core.agent.browser_scroll_tool")
+    async def test_tool_browser_scroll(self, mock_scroll):
+        mock_scroll.return_value = {"ok": True}
+        agent = MobileAgent()
+        result = await agent._tool_browser_scroll("down", 300)
+        assert result == {"ok": True}
+        mock_scroll.assert_called_once_with("down", 300)
+
+    @patch("hermes_mobile.core.agent.browser_type_tool")
+    async def test_tool_browser_type(self, mock_type):
+        mock_type.return_value = {"ok": True}
+        agent = MobileAgent()
+        result = await agent._tool_browser_type("input[name=q]", "hello")
+        assert result == {"ok": True}
+        mock_type.assert_called_once_with("input[name=q]", "hello")
+
+    async def test_tool_browser_scroll_without_webview_errors_gracefully(self):
+        from hermes_mobile.tools.browser_session import _session
+
+        _session.webview = None
+        try:
+            agent = MobileAgent()
+            result = await agent._tool_browser_scroll("down", 300)
+            assert "WebView browser is not active" in result.get("error", "")
+        finally:
+            _session.webview = None
 
     def test_extract_tool_calls_empty(self):
         response = MagicMock()

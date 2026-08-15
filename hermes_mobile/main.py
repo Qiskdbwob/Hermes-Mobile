@@ -26,6 +26,7 @@ from hermes_mobile.plugins import get_plugin_registry
 from hermes_mobile.remote import RemoteEvent, RemoteHermesClient, RemoteSecretStore
 from hermes_mobile.skills.manager import MobileSkillManager
 from hermes_mobile.ui.artifacts_view import ArtifactsView
+from hermes_mobile.ui.browser_view import BrowserView
 from hermes_mobile.ui.chat_view import ChatView
 from hermes_mobile.ui.common import brand_mark, snack, status_dot
 from hermes_mobile.ui.composer_state import ComposerStateStore
@@ -57,6 +58,7 @@ class HermesMobileApp:
         "skills",
         "messaging",
         "artifacts",
+        "browser",
         "tools",
         "memory",
         "cron",
@@ -66,7 +68,16 @@ class HermesMobileApp:
         "kanban",
         "settings",
     ]
-    OVERFLOW_VIEWS = ["tools", "memory", "cron", "plugins", "terminal", "kanban", "settings"]
+    OVERFLOW_VIEWS = [
+        "browser",
+        "tools",
+        "memory",
+        "cron",
+        "plugins",
+        "terminal",
+        "kanban",
+        "settings",
+    ]
 
     def __init__(self, page: ft.Page):
         self.page = page
@@ -102,6 +113,7 @@ class HermesMobileApp:
         self.plugins_view: PluginsView = None
         self.tools_view: ToolsView = None
         self.artifacts_view: ArtifactsView = None
+        self.browser_view: BrowserView = None
         self.terminal_view: TerminalView = None
         self.kanban_view: KanbanView = None
         self.sessions_view: SessionsView = cast(SessionsView, None)
@@ -284,6 +296,7 @@ class HermesMobileApp:
         self.plugins_view = PluginsView(self)
         self.tools_view = ToolsView(self)
         self.artifacts_view = ArtifactsView(self)
+        self.browser_view = BrowserView(self)
         self.terminal_view = TerminalView(self)
         self.kanban_view = KanbanView(self)
         self.sessions_view = SessionsView(self)
@@ -317,6 +330,11 @@ class HermesMobileApp:
                     ft.Icons.FOLDER_OUTLINED,
                     ft.Icons.FOLDER,
                     t("nav.artifacts"),
+                ),
+                "browser": (
+                    ft.Icons.PUBLIC_OUTLINED,
+                    ft.Icons.PUBLIC,
+                    t("nav.browser"),
                 ),
                 "tools": (ft.Icons.BUILD_OUTLINED, ft.Icons.BUILD, t("nav.tools")),
                 "memory": (
@@ -452,6 +470,11 @@ class HermesMobileApp:
             icon_color=c["muted_foreground"],
             tooltip=t("nav.more"),
             items=[
+                ft.PopupMenuItem(
+                    icon=ft.Icons.PUBLIC_OUTLINED,
+                    content=t("nav.browser"),
+                    on_click=lambda e: self._navigate_to("browser"),
+                ),
                 ft.PopupMenuItem(
                     icon=ft.Icons.BUILD_OUTLINED,
                     content=t("nav.tools"),
@@ -624,6 +647,7 @@ class HermesMobileApp:
         builders = {
             "chat": self.chat_view.build,
             "sessions": self.sessions_view.build,
+            "browser": self.browser_view.build,
             "tools": self.tools_view.build,
             "memory": self.memory_view.build,
             "skills": self.skills_view.build,

@@ -162,7 +162,8 @@ class TestApi:
         assert "text" in called_json
         assert "extra" not in called_json
 
-    async def test_retries_on_timeout(self, adapter):
+    @patch("asyncio.sleep", return_value=None)
+    async def test_retries_on_timeout(self, mock_sleep, adapter):
         import httpx
 
         mock_client = MagicMock()
@@ -171,7 +172,7 @@ class TestApi:
 
         result = await adapter._api("getMe")
         assert result["ok"] is False
-        assert mock_client.post.call_count >= 1
+        assert mock_client.post.call_count == 3
 
     @patch("asyncio.sleep", return_value=None)
     async def test_retries_on_generic_exception(self, mock_sleep, adapter):
@@ -228,14 +229,15 @@ class TestProcessUpdate:
 
         await adapter._process_update(update)
         cb.assert_awaited_once()
-        args = cb.call_args[0][0]
-        assert args["platform"] == "telegram"
-        assert args["chat_id"] == "123"
-        assert args["user_id"] == "456"
-        assert args["text"] == "hello world"
-        assert args["message_id"] == 10
-        assert args["user_name"] == "John Doe"
-        assert args["is_edit"] is False
+        platform, chat_id, user_id, text, metadata = cb.call_args[0]
+        assert platform == "telegram"
+        assert chat_id == "123"
+        assert user_id == "456"
+        assert text == "hello world"
+        assert metadata["message_id"] == 10
+        assert metadata["user_name"] == "John Doe"
+        assert metadata["chat_type"] == "private"
+        assert metadata["is_edit"] is False
 
     @patch.object(TelegramAdapter, "_api")
     async def test_processes_edited_message(self, mock_api, adapter):
@@ -254,10 +256,11 @@ class TestProcessUpdate:
 
         await adapter._process_update(update)
         cb.assert_awaited_once()
-        args = cb.call_args[0][0]
-        assert args["text"] == "edited text"
-        assert args["chat_id"] == "789"
-        assert args["is_edit"] is True
+        platform, chat_id, user_id, text, metadata = cb.call_args[0]
+        assert text == "edited text"
+        assert chat_id == "789"
+        assert metadata["is_edit"] is True
+        assert metadata["chat_type"] == "group"
 
     @patch.object(TelegramAdapter, "_api")
     async def test_handles_caption_as_text(self, mock_api, adapter):
@@ -275,7 +278,7 @@ class TestProcessUpdate:
         }
 
         await adapter._process_update(update)
-        assert cb.call_args[0][0]["text"] == "photo caption"
+        assert cb.call_args[0][3] == "photo caption"
 
     @patch.object(TelegramAdapter, "_api")
     async def test_skips_missing_text_and_chat_id(self, mock_api, adapter):
@@ -325,7 +328,7 @@ class TestProcessUpdate:
         }
 
         await adapter._process_update(update)
-        assert cb.call_args[0][0]["user_name"] == "Unknown"
+        assert cb.call_args[0][4]["user_name"] == "Unknown"
 
 
 class TestPollLoop:
@@ -367,3 +370,45 @@ class TestPollLoop:
         adapter._running = False
         await adapter._poll_loop()  # Should return immediately
         assert True
+
+    @patch("asyncio.sleep", return_value=None)
+    @patch.object(TelegramAdapter, "_api")
+    async def test_409_conflict_backs_off_and_keeps_polling(self, mock_api, mock_sleep, adapter):
+        calls = 0
+
+        async def api_side_effect(method, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return {"ok": False, "error_code": 409, "description": "conflict"}
+            adapter._running = False
+            return {"ok": True, "result": []}
+
+        mock_api.side_effect = api_side_effect
+        adapter._running = True
+        await adapter._poll_loop()
+
+        assert calls == 2  # kept polling after the 409 backoff
+        mock_sleep.assert_awaited_with(60)
+
+    @patch("asyncio.sleep", return_value=None)
+    @patch.object(TelegramAdapter, "_api")
+    async def test_not_ok_updates_back_off_instead_of_hot_looping(
+        self, mock_api, mock_sleep, adapter
+    ):
+        calls = 0
+
+        async def api_side_effect(method, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return {"ok": False, "error_code": 429, "description": "rate limited"}
+            adapter._running = False
+            return {"ok": True, "result": []}
+
+        mock_api.side_effect = api_side_effect
+        adapter._running = True
+        await adapter._poll_loop()
+
+        assert calls == 2
+        mock_sleep.assert_awaited_with(5)
