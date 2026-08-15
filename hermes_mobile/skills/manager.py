@@ -170,12 +170,26 @@ class MobileSkillManager:
                 lines = docstring.strip().split("\n")
                 if lines:
                     description = lines[0]
-                    for line in lines:
+                    # The schema is a YAML block that starts at the "schema:"
+                    # line and continues over the following more-indented
+                    # lines. Previously only the first line was parsed, which
+                    # silently truncated multi-line schemas to one key.
+                    for i, line in enumerate(lines):
                         if line.strip().startswith("schema:"):
+                            schema_lines = [line.split("schema:", 1)[1]]
+                            indent = len(line) - len(line.lstrip())
+                            for next_line in lines[i + 1 :]:
+                                if not next_line.strip():
+                                    continue
+                                if len(next_line) - len(next_line.lstrip()) > indent:
+                                    schema_lines.append(next_line)
+                                else:
+                                    break
                             try:
-                                schema = yaml.safe_load(line.split("schema:", 1)[1])
+                                schema = yaml.safe_load("\n".join(schema_lines)) or {}
                             except Exception:
                                 pass
+                            break
 
             skill = MobileSkill(
                 name=name,
@@ -193,6 +207,17 @@ class MobileSkillManager:
     def get_skill(self, name: str) -> Optional[MobileSkill]:
         """Get a skill by name"""
         return self._skills.get(name)
+
+    def _find_skill_by_path(self, path: Path) -> Optional[MobileSkill]:
+        """Find a loaded skill by its on-disk path.
+
+        Installed skills are keyed by the name declared in their manifest, which
+        can differ from the folder/file name they were copied from.
+        """
+        for skill in self._skills.values():
+            if skill.path == path:
+                return skill
+        return None
 
     def get_active_skills(self) -> List[MobileSkill]:
         """Get all enabled skills"""
@@ -264,12 +289,12 @@ class MobileSkillManager:
                         shutil.rmtree(dest)
                     shutil.copytree(skill_dir, dest)
                     self._load_skill_package(dest)
-                    return self._skills.get(skill_dir.name)
+                    return self._find_skill_by_path(dest)
                 else:
                     dest = self.skills_dir / skill_dir.name
                     shutil.copy2(skill_dir, dest)
                     self._load_skill_file(dest)
-                    return self._skills.get(skill_dir.stem)
+                    return self._find_skill_by_path(dest)
 
         except Exception as e:
             logger.error(f"Failed to install skill from {url}: {e}")
@@ -284,12 +309,12 @@ class MobileSkillManager:
                     shutil.rmtree(dest)
                 shutil.copytree(path, dest)
                 self._load_skill_package(dest)
-                return self._skills.get(path.name)
+                return self._find_skill_by_path(dest)
             else:
                 dest = self.skills_dir / path.name
                 shutil.copy2(path, dest)
                 self._load_skill_file(dest)
-                return self._skills.get(path.stem)
+                return self._find_skill_by_path(dest)
         except Exception as e:
             logger.error(f"Failed to install skill from {path}: {e}")
             return None

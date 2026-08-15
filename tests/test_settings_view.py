@@ -175,6 +175,41 @@ def test_keyless_provider_keeps_optional_api_key_field_and_shows_endpoint(tmp_pa
     assert any("optional" in label.lower() for control in controls for label in texts(control))
 
 
+def test_ollama_endpoint_field_editable(tmp_path):
+    app = make_app(tmp_path)
+    view = SettingsView(app)
+    view.draft.default_provider = "ollama"
+
+    controls = view._build_provider_controls()
+    fields = [
+        item for control in controls for item in walk(control) if isinstance(item, ft.TextField)
+    ]
+    endpoint = next((f for f in fields if f.label and "Endpoint" in f.label), None)
+    assert endpoint is not None
+    assert endpoint.value == ""
+
+    endpoint.value = "http://192.168.1.20:11434"
+    view._on_ollama_host_change(SimpleNamespace(control=endpoint))
+
+    assert view.draft.ollama_host == "http://192.168.1.20:11434"
+    assert view._dirty_count() > 0
+
+
+@pytest.mark.asyncio
+async def test_ollama_endpoint_commit_persists_and_reconfigures(tmp_path):
+    app = make_app(tmp_path)
+    view = SettingsView(app)
+    view.draft.default_provider = "ollama"
+    view.draft.default_model = "llama3.1:8b"
+    view.draft.ollama_host = "http://192.168.1.20:11434"
+
+    ok = await view._commit_draft()
+
+    assert ok
+    assert app.settings.ollama_host == "http://192.168.1.20:11434"
+    assert app.agent.routes != []
+
+
 @pytest.mark.asyncio
 async def test_model_inventory_refresh_never_rewrites_configured_model(tmp_path, monkeypatch):
     app = make_app(tmp_path)

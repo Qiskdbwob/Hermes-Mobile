@@ -7,6 +7,7 @@ must show the real active state per toolset.
 """
 
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import flet as ft
 
@@ -100,6 +101,32 @@ class TestDeadToolFiltering:
         assert "web_search" not in names
         assert "read_file" in names
         assert "write_file" in names
+
+
+class TestPersistedToggles:
+    def test_apply_persisted_disables_saved_toolsets(self):
+        view, app = make_view(builtins={"web_search": None, "read_file": None, "write_file": None})
+        app.agent.tools = [
+            {"type": "function", "function": {"name": "web_search"}},
+            {"type": "function", "function": {"name": "read_file"}},
+        ]
+        app.settings = SimpleNamespace(toolset_toggles={"web": False})
+
+        view.apply_persisted()
+
+        names = {t["function"]["name"] for t in app.agent.tools}
+        assert "web_search" not in names
+        assert "read_file" in names
+
+    def test_toggle_persists_choice(self):
+        view, app = make_view(builtins={"web_search": None})
+        app.settings = SimpleNamespace(toolset_toggles={})
+
+        with patch("hermes_mobile.ui.tools_view.save_settings") as mock_save:
+            view._toggle_toolset("web", False)
+
+        assert app.settings.toolset_toggles == {"web": False}
+        mock_save.assert_called_once()
 
 
 class TestToolsetCardState:

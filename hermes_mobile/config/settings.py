@@ -65,6 +65,9 @@ class HermesMobileSettings(BaseSettings):
     openai_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
     gemini_api_key: Optional[str] = None
+    # Local Ollama endpoint (host:port) editable from Settings. Empty means
+    # fall back to OLLAMA_HOST env, then http://localhost:11434.
+    ollama_host: str = ""
 
     # Model settings
     default_model: str = "anthropic/claude-3.5-sonnet"
@@ -127,6 +130,11 @@ Be concise but thorough. Use tools when appropriate."""
     show_tool_calls: bool = True
     stream_responses: bool = True
 
+    # Persisted on/off states for the Tools and Plugins views. Keyed by
+    # toolset/plugin name; absent entries mean "default on".
+    toolset_toggles: dict[str, bool] = {}
+    plugin_toggles: dict[str, bool] = {}
+
     # Network settings
     request_timeout: int = 120
     max_retries: int = 3
@@ -171,6 +179,7 @@ Be concise but thorough. Use tools when appropriate."""
     _PERSISTED_FIELDS = (
         "default_provider",
         "default_model",
+        "ollama_host",
         "max_iterations",
         "max_tokens",
         "temperature",
@@ -195,6 +204,8 @@ Be concise but thorough. Use tools when appropriate."""
         "pet_roam",
         "show_tool_calls",
         "stream_responses",
+        "toolset_toggles",
+        "plugin_toggles",
         "request_timeout",
         "max_retries",
         "encrypt_memory",

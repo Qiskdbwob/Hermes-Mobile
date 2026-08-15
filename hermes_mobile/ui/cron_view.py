@@ -17,6 +17,7 @@ from hermes_mobile.cron.scheduler import (
 from hermes_mobile.cron.scheduler import (
     update_job as _update_job,
 )
+from hermes_mobile.locales import t
 from hermes_mobile.ui.common import (
     close_dialog,
     empty_state,
@@ -44,60 +45,30 @@ class CronView:
             [
                 ft.IconButton(
                     icon=ft.Icons.REFRESH,
-                    tooltip="Refresh",
+                    tooltip=t("cron.refresh"),
                     on_click=lambda e: self._refresh(),
                 ),
                 ft.IconButton(
                     icon=ft.Icons.ADD,
-                    tooltip="Add Job",
+                    tooltip=t("cron.add"),
                     on_click=lambda e: self._show_add_job_dialog(),
                 ),
             ],
             spacing=0,
         )
+        interval = int(status.get("interval", 60))
+        header_status = (
+            t("cron.status_running", seconds=interval)
+            if running
+            else t("cron.status_stopped", seconds=interval)
+        )
         return ft.Column(
             [
-                page_header(
-                    self.app.dark_mode,
-                    "Cron Jobs",
-                    f"{'Running' if running else 'Stopped'} · every {status.get('interval', 60)}s",
-                    actions,
-                ),
+                page_header(self.app.dark_mode, t("cron.title"), header_status, actions),
                 ft.Container(content=self._build_jobs_list(), expand=True),
             ],
             expand=True,
             spacing=0,
-        )
-
-    def _build_ticker_status(self) -> ft.Control:
-        """Build ticker status indicator"""
-        status = get_ticker_status()
-        running = status.get("running", False)
-
-        return ft.Container(
-            content=ft.Row(
-                [
-                    ft.Icon(
-                        ft.Icons.CIRCLE,
-                        size=12,
-                        color=ft.Colors.GREEN if running else ft.Colors.RED,
-                    ),
-                    ft.Text(
-                        "Running" if running else "Stopped",
-                        size=12,
-                        color=ft.Colors.GREEN if running else ft.Colors.RED,
-                    ),
-                    ft.Text(
-                        f" | Interval: {status.get('interval', 60)}s",
-                        size=12,
-                        color=ft.Colors.OUTLINE,
-                    ),
-                ],
-                spacing=4,
-            ),
-            padding=ft.Padding.symmetric(horizontal=12, vertical=6),
-            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-            border_radius=16,
         )
 
     def _build_jobs_list(self) -> ft.Control:
@@ -107,11 +78,11 @@ class CronView:
         if not jobs:
             return empty_state(
                 self.app.dark_mode,
-                "No cron jobs",
-                "Create a scheduled job to get started.",
+                t("cron.no_jobs"),
+                t("cron.no_jobs_hint"),
                 ft.Icons.SCHEDULE,
                 flat_button(
-                    "Create Job",
+                    t("cron.create_job"),
                     ft.Icons.ADD,
                     lambda e: self._show_add_job_dialog(),
                     self.app.dark_mode,
@@ -135,34 +106,35 @@ class CronView:
             None: c["muted_foreground"],
         }
         status_color = status_colors.get(job.last_status, c["muted_foreground"])
-        status_label = job.last_status.upper() if job.last_status else "NEVER RUN"
+        status_label = job.last_status.upper() if job.last_status else t("cron.never_run")
         next_run = job.next_run[:16] if job.next_run else "N/A"
         subtitle = (
             f"{job.schedule} · {job.description}\n"
-            f"Runs {job.run_count} · Failures {job.failure_count} · Next {next_run}"
+            f"{t('cron.runs', count=job.run_count)} · {t('cron.failures', count=job.failure_count)} · "
+            f"{t('cron.next', value=next_run)}"
         )
         menu = ft.PopupMenuButton(
             icon=ft.Icons.MORE_VERT,
-            tooltip="Job actions",
+            tooltip=t("cron.job_actions"),
             items=[
                 ft.PopupMenuItem(
-                    content=ft.Text("Run now"),
+                    content=ft.Text(t("cron.run_now")),
                     on_click=lambda e, j=job: self._run_job_now(j),
                 ),
                 ft.PopupMenuItem(
-                    content=ft.Text("Disable" if job.enabled else "Enable"),
+                    content=ft.Text(t("cron.pause") if job.enabled else t("cron.resume")),
                     on_click=lambda e, j=job: self._toggle_job(j),
                 ),
                 ft.PopupMenuItem(
-                    content=ft.Text("View output"),
+                    content=ft.Text(t("cron.view_output")),
                     on_click=lambda e, j=job: self._show_job_output(j),
                 ),
                 ft.PopupMenuItem(
-                    content=ft.Text("Edit"),
+                    content=ft.Text(t("cron.edit")),
                     on_click=lambda e, j=job: self._show_edit_job_dialog(j),
                 ),
                 ft.PopupMenuItem(
-                    content=ft.Text("Delete"),
+                    content=ft.Text(t("cron.delete")),
                     on_click=lambda e, j=job: self._confirm_delete_job(j),
                 ),
             ],
@@ -186,19 +158,21 @@ class CronView:
 
     def _show_add_job_dialog(self):
         """Show add job dialog"""
-        name_field = ft.TextField(label="Job Name", hint_text="my_backup_job")
-        schedule_field = ft.TextField(label="Cron Schedule", hint_text="0 3 * * * (daily at 3 AM)")
+        name_field = ft.TextField(label=t("cron.job_name"), hint_text="my_backup_job")
+        schedule_field = ft.TextField(label=t("cron.schedule"), hint_text=t("cron.schedule_hint"))
         command_field = ft.TextField(
-            label="Command",
-            hint_text="python3 -m hermes_mobile.cron.backup_data",
+            label=t("cron.command"),
+            hint_text=t("cron.command_hint"),
             multiline=True,
             min_lines=2,
         )
-        description_field = ft.TextField(label="Description", hint_text="Backup data to cloud")
-        timeout_field = ft.TextField(
-            label="Timeout (seconds)", value="300", keyboard_type=ft.KeyboardType.NUMBER
+        description_field = ft.TextField(
+            label=t("cron.description"), hint_text="Backup data to cloud"
         )
-        enabled_switch = ft.Switch(label="Enabled", value=True)
+        timeout_field = ft.TextField(
+            label=t("cron.timeout"), value="300", keyboard_type=ft.KeyboardType.NUMBER
+        )
+        enabled_switch = ft.Switch(label=t("common.enabled"), value=True)
 
         def handle_create(e):
             try:
@@ -212,12 +186,12 @@ class CronView:
                 )
                 close_dialog(self.page, dialog)
                 self._refresh()
-                snack(self.page, "Job created successfully")
+                snack(self.page, t("cron.created"))
             except Exception as ex:
-                snack(self.page, f"Error: {ex}")
+                snack(self.page, t("cron.create_error", error=ex))
 
         dialog = ft.AlertDialog(
-            title=ft.Text("Create Cron Job"),
+            title=ft.Text(t("cron.add_title")),
             content=ft.Container(
                 content=ft.Column(
                     [
@@ -235,24 +209,26 @@ class CronView:
                 width=400,
             ),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
-                ft.Button("Create", on_click=handle_create),
+                ft.TextButton(
+                    t("common.cancel"), on_click=lambda e: close_dialog(self.page, dialog)
+                ),
+                ft.Button(t("cron.create"), on_click=handle_create),
             ],
         )
         open_dialog(self.page, dialog)
 
     def _show_edit_job_dialog(self, job):
         """Show edit job dialog"""
-        name_field = ft.TextField(label="Job Name", value=job.name)
-        schedule_field = ft.TextField(label="Cron Schedule", value=job.schedule)
+        name_field = ft.TextField(label=t("cron.job_name"), value=job.name)
+        schedule_field = ft.TextField(label=t("cron.schedule"), value=job.schedule)
         command_field = ft.TextField(
-            label="Command", value=job.command, multiline=True, min_lines=2
+            label=t("cron.command"), value=job.command, multiline=True, min_lines=2
         )
-        description_field = ft.TextField(label="Description", value=job.description)
+        description_field = ft.TextField(label=t("cron.description"), value=job.description)
         timeout_field = ft.TextField(
-            label="Timeout (seconds)", value=str(job.timeout), keyboard_type=ft.KeyboardType.NUMBER
+            label=t("cron.timeout"), value=str(job.timeout), keyboard_type=ft.KeyboardType.NUMBER
         )
-        enabled_switch = ft.Switch(label="Enabled", value=job.enabled)
+        enabled_switch = ft.Switch(label=t("common.enabled"), value=job.enabled)
 
         def handle_update(e):
             try:
@@ -267,12 +243,12 @@ class CronView:
                 )
                 close_dialog(self.page, dialog)
                 self._refresh()
-                snack(self.page, "Job updated successfully")
+                snack(self.page, t("cron.updated"))
             except Exception as ex:
-                snack(self.page, f"Error: {ex}")
+                snack(self.page, t("cron.create_error", error=ex))
 
         dialog = ft.AlertDialog(
-            title=ft.Text(f"Edit Job: {job.name}"),
+            title=ft.Text(t("cron.edit_title", name=job.name)),
             content=ft.Container(
                 content=ft.Column(
                     [
@@ -290,8 +266,10 @@ class CronView:
                 width=400,
             ),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
-                ft.Button("Save", on_click=handle_update),
+                ft.TextButton(
+                    t("common.cancel"), on_click=lambda e: close_dialog(self.page, dialog)
+                ),
+                ft.Button(t("common.save"), on_click=handle_update),
             ],
         )
         open_dialog(self.page, dialog)
@@ -308,9 +286,12 @@ class CronView:
         """
         try:
             output = await asyncio.to_thread(run_job_now, job.id)
-            snack(self.page, f"Job completed: {output.status} ({output.duration:.1f}s)")
+            snack(
+                self.page,
+                t("cron.completed", status=output.status, duration=f"{output.duration:.1f}"),
+            )
         except Exception as exc:
-            snack(self.page, f"Job failed: {exc}", error=True)
+            snack(self.page, t("cron.failed", error=exc), error=True)
         self._refresh()
 
     def _toggle_job(self, job):
@@ -328,7 +309,7 @@ class CronView:
 
         content = ft.Column(
             [
-                ft.Text(f"Output for: {job.name}", weight=ft.FontWeight.BOLD, size=16),
+                ft.Text(t("cron.output_title", name=job.name), weight=ft.FontWeight.BOLD, size=16),
                 ft.Divider(),
                 ft.Column(
                     [
@@ -366,9 +347,10 @@ class CronView:
                                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                                     ),
                                     ft.Text(
-                                        (
-                                            f"Duration: {out.duration:.1f}s | "
-                                            f"Code: {out.return_code}"
+                                        t(
+                                            "cron.duration_code",
+                                            duration=f"{out.duration:.1f}",
+                                            code=out.return_code,
                                         ),
                                         size=10,
                                         color=ft.Colors.OUTLINE,
@@ -390,7 +372,7 @@ class CronView:
                         )
                         for out in outputs
                     ]
-                    or [ft.Text("No output history", color=ft.Colors.OUTLINE)],
+                    or [ft.Text(t("cron.no_output"), color=ft.Colors.OUTLINE)],
                     spacing=8,
                     scroll=ft.ScrollMode.AUTO,
                 ),
@@ -403,7 +385,9 @@ class CronView:
         dialog = ft.AlertDialog(
             title=ft.Text(f"Job Output: {job.name}"),
             content=ft.Container(content=content, width=500, height=600),
-            actions=[ft.TextButton("Close", on_click=lambda e: close_dialog(self.page, dialog))],
+            actions=[
+                ft.TextButton(t("common.close"), on_click=lambda e: close_dialog(self.page, dialog))
+            ],
         )
         open_dialog(self.page, dialog)
 
@@ -414,16 +398,16 @@ class CronView:
             delete_job(job.id)
             close_dialog(self.page, dialog)
             self._refresh()
-            snack(self.page, "Job deleted")
+            snack(self.page, t("cron.deleted"))
 
         dialog = ft.AlertDialog(
-            title=ft.Text("Delete Job"),
-            content=ft.Text(
-                f"Are you sure you want to delete '{job.name}'? This cannot be undone."
-            ),
+            title=ft.Text(t("cron.delete_title")),
+            content=ft.Text(t("cron.delete_confirm", name=job.name)),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
-                ft.Button("Delete", color=ft.Colors.ERROR, on_click=delete),
+                ft.TextButton(
+                    t("common.cancel"), on_click=lambda e: close_dialog(self.page, dialog)
+                ),
+                ft.Button(t("cron.delete"), color=ft.Colors.ERROR, on_click=delete),
             ],
         )
         open_dialog(self.page, dialog)

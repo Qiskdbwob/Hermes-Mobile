@@ -377,6 +377,18 @@ async def execute(q: str) -> str:
         assert skill is not None
         assert "schema" in skill.description or skill.schema != {}
 
+    def test_load_skill_file_multiline_schema(self, temp_dir: Path):
+        """Multi-line YAML schemas in a skill docstring parse fully."""
+        code = '"""\nMy docstring\nschema:\n  type: object\n  properties:\n    input:\n      type: string\n      description: Input value\n  required:\n    - input\n"""\nasync def execute(input: str) -> str:\n    return input\n'
+        _create_skill_file(temp_dir, "multiline_schema", code)
+        manager = MobileSkillManager(temp_dir)
+        skill = manager.get_skill("multiline_schema")
+        assert skill is not None
+        assert skill.description == "My docstring"
+        assert skill.schema.get("type") == "object"
+        assert "input" in skill.schema.get("properties", {})
+        assert skill.schema.get("required") == ["input"]
+
     def test_load_skill_file_error(self, temp_dir: Path, monkeypatch):
         manager = MobileSkillManager(temp_dir)
         bad_file = temp_dir / "broken.py"
@@ -448,6 +460,25 @@ async def execute(q: str) -> str:
         result2 = await manager.install_skill_from_path(pkg_dir)
         assert result2 is not None
         assert result2.name == "overwrite_me"
+
+    async def test_install_skill_from_path_dir_name_mismatch(self, temp_dir: Path):
+        """A package whose manifest name differs from its folder name must still
+        be returned (lookup was keyed on the folder name before)."""
+        src_dir = temp_dir / "my_repo"
+        src_dir.mkdir()
+        manifest = {
+            "name": "real_name",
+            "description": "Imported package",
+            "schema": {"type": "object", "properties": {}},
+        }
+        (src_dir / "skill.yaml").write_text(yaml.dump(manifest))
+        (src_dir / "main.py").write_text("async def execute(): return 'imported'")
+
+        manager = MobileSkillManager(temp_dir / "skills_dest")
+        result = await manager.install_skill_from_path(src_dir)
+        assert result is not None
+        assert result.name == "real_name"
+        assert manager.get_skill("real_name") is result
 
     async def test_install_skill_from_path_error(self, temp_dir: Path):
         manager = MobileSkillManager(temp_dir)

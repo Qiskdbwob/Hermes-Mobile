@@ -695,6 +695,49 @@ class TestMobileAgent:
         assert calls[0] == ("call", "get_time")
         assert calls[1] == ("result", "get_time")
 
+    async def test_execute_tool_denied_by_approval(self):
+        async def deny(name, arguments):
+            return False
+
+        agent = MobileAgent(approval_callback=deny)
+        tc = ToolCall(name="terminal", arguments={"command": "rm -rf /"})
+        await agent._execute_tool_calls([tc])
+        assert tc.error is not None
+        assert "not approved" in tc.error
+
+    async def test_execute_tool_approved_by_approval(self):
+        async def approve(name, arguments):
+            return True
+
+        agent = MobileAgent(approval_callback=approve)
+        agent.process_registry.terminal = AsyncMock(  # type: ignore[method-assign]
+            return_value={"exit_code": 0, "output": "ok"}
+        )
+        tc = ToolCall(name="terminal", arguments={"command": "echo hi"})
+        await agent._execute_tool_calls([tc])
+        assert tc.error is None
+        assert tc.result is not None
+        agent.process_registry.terminal.assert_awaited_once()
+
+    async def test_execute_tool_without_approval_callback_runs(self):
+        """Contexts without a callback (gateway/remote) keep the legacy behavior."""
+        agent = MobileAgent()
+        agent.process_registry.terminal = AsyncMock(  # type: ignore[method-assign]
+            return_value={"exit_code": 0, "output": "ok"}
+        )
+        tc = ToolCall(name="terminal", arguments={"command": "echo hi"})
+        await agent._execute_tool_calls([tc])
+        assert tc.error is None
+        agent.process_registry.terminal.assert_awaited_once()
+
+    async def test_execute_tool_non_sensitive_ignores_approval(self):
+        async def deny(name, arguments):
+            return False
+
+        agent = MobileAgent(approval_callback=deny)
+        result = await agent._execute_tool("get_time", {})
+        assert result is not None
+
     async def test_execute_tool_builtin(self):
         agent = MobileAgent()
         result = await agent._execute_tool("get_time", {})

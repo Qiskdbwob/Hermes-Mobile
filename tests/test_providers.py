@@ -244,6 +244,34 @@ class TestOllamaOpenAICompat:
         assert p.resolve_base_url() == "http://192.168.1.50:11434/v1"
         assert p.resolve_models_url() == "http://192.168.1.50:11434/api/tags"
 
+    def test_ollama_resolve_urls_honors_setting(self, monkeypatch):
+        from hermes_mobile.config.settings import settings as global_settings
+
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        monkeypatch.setattr(global_settings, "ollama_host", "http://10.0.0.5:11434")
+        p = OllamaProfile()
+        assert p.resolve_base_url() == "http://10.0.0.5:11434/v1"
+        assert p.resolve_models_url() == "http://10.0.0.5:11434/api/tags"
+
+    def test_ollama_resolve_urls_setting_beats_env(self, monkeypatch):
+        from hermes_mobile.config.settings import settings as global_settings
+
+        monkeypatch.setenv("OLLAMA_HOST", "http://env-host:11434")
+        monkeypatch.setattr(global_settings, "ollama_host", "http://settings-host:11434")
+        p = OllamaProfile()
+        assert p.resolve_base_url() == "http://settings-host:11434/v1"
+        assert p.resolve_models_url() == "http://settings-host:11434/api/tags"
+
+    def test_ollama_resolve_urls_normalizes_v1_endpoint(self, monkeypatch):
+        from hermes_mobile.config.settings import settings as global_settings
+
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        monkeypatch.setattr(global_settings, "ollama_host", "http://10.0.0.5:11434/v1")
+        p = OllamaProfile()
+        # A full /v1 URL typed by the user is normalized, not doubled.
+        assert p.resolve_base_url() == "http://10.0.0.5:11434/v1"
+        assert p.resolve_models_url() == "http://10.0.0.5:11434/api/tags"
+
     async def test_fetch_ollama_models_uses_resolved_url(self, monkeypatch):
         monkeypatch.setenv("OLLAMA_HOST", "http://192.168.1.50:11434")
         profile = OllamaProfile()

@@ -1,7 +1,10 @@
 """Tests for the plugins system."""
 
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
+import flet as ft
 import pytest
 import yaml
 
@@ -168,6 +171,40 @@ class MyPlugin(BasePlugin):
         loaded = registry.discover_plugins()
         assert len(loaded) > 0
         assert "my_plugin" in loaded
+
+    def test_discover_without_manual_config(self, temp_dir):
+        """discover_plugins works out of the box — the registry provides its own
+        config dict instead of requiring callers to set `registry.config`."""
+        plugin_dir = temp_dir / "plugins"
+        plugin_dir.mkdir()
+
+        pkg_dir = plugin_dir / "my_plugin"
+        pkg_dir.mkdir()
+
+        manifest = {
+            "name": "my_plugin",
+            "kind": "tool",
+            "version": "1.0.0",
+            "description": "My test plugin",
+        }
+        (pkg_dir / "plugin.yaml").write_text(yaml.dump(manifest))
+
+        init_code = """
+from hermes_mobile.plugins import BasePlugin, PluginManifest
+class MyPlugin(BasePlugin):
+    def get_manifest(self):
+        return PluginManifest(name="my_plugin", kind="tool", version="1.0", description="x")
+    async def initialize(self): return True
+    async def shutdown(self): pass
+"""
+        (pkg_dir / "__init__.py").write_text(init_code)
+
+        registry = PluginRegistry()
+        registry.add_plugin_dir(plugin_dir)
+
+        loaded = registry.discover_plugins()
+        assert "my_plugin" in loaded
+        assert registry.get_plugin("my_plugin") is not None
 
     def test_discover_skips_missing_manifest(self, temp_dir):
         plugin_dir = temp_dir / "plugins"
@@ -348,6 +385,21 @@ class TestGetPluginRegistry:
         registry = get_plugin_registry()
         assert registry is get_plugin_registry()
 
+    def test_registry_runs_discovery(self, monkeypatch):
+        """get_plugin_registry must invoke discovery for external plugins."""
+        import hermes_mobile.plugins as plugins_mod
+
+        calls = []
+        monkeypatch.setattr(
+            plugins_mod.PluginRegistry,
+            "discover_plugins",
+            lambda self: calls.append(1) or [],
+        )
+        monkeypatch.setattr(plugins_mod, "_plugin_registry", None)
+
+        get_plugin_registry()
+        assert calls == [1]
+
     def test_has_builtin_plugins(self):
         registry = get_plugin_registry()
         assert registry.get_plugin("achievements") is not None
@@ -359,3 +411,46 @@ class TestGetPluginRegistry:
         assert registry.get_manifest("achievements").name == "achievements"
         assert registry.get_manifest("kanban").name == "kanban"
         assert registry.get_manifest("security-guidance").name == "security-guidance"
+
+
+class TestPluginsViewTogglePersistence:
+    def _make_view(self):
+        from hermes_mobile.ui.plugins_view import PluginsView
+
+        class FakePage:
+            platform = ft.PagePlatform.ANDROID
+            width = 430
+            theme_mode = ft.ThemeMode.DARK
+
+            def __init__(self):
+                self.overlay = []
+                self.updates = 0
+
+            def update(self):
+                self.updates += 1
+
+        class FakeSettings:
+            plugin_toggles = {}
+
+        app = SimpleNamespace(
+            page=FakePage(),
+            settings=FakeSettings(),
+            content_area=SimpleNamespace(content=None),
+            dark_mode=True,
+        )
+        return PluginsView(app), app
+
+    def test_toggle_persists_choice(self):
+        view, app = self._make_view()
+        registry = get_plugin_registry()
+        manifest = registry.get_manifest("kanban")
+        plugin = registry.get_plugin("kanban")
+        plugin.enabled = True
+
+        with patch("hermes_mobile.ui.plugins_view.save_settings") as mock_save:
+            view._toggle_plugin(manifest, False)
+
+        assert app.settings.plugin_toggles == {"kanban": False}
+        mock_save.assert_called_once()
+        assert plugin.enabled is False
+        plugin.enabled = True  # restore singleton state for other tests

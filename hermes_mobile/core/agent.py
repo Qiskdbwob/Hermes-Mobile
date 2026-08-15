@@ -8,7 +8,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from hermes_mobile.config.settings import get_settings
 from hermes_mobile.core.context_compressor import compress_messages, needs_compression
@@ -160,6 +160,8 @@ class MobileAgent:
         on_tool_result: Optional[Callable[[ToolCall], None]] = None,
         on_message: Optional[Callable[[Message], None]] = None,
         blocked_tools: Optional[set[str]] = None,
+        approval_callback: Optional[Callable[[str, Dict[str, Any]], Awaitable[bool]]] = None,
+        approval_tools: Optional[set[str]] = None,
     ):
         self.settings = get_settings()
         self.model = model or self.settings.default_model
@@ -169,6 +171,13 @@ class MobileAgent:
         self.memory_provider = memory_provider
         self.skill_manager = skill_manager
         self.blocked_tools = frozenset(blocked_tools or ())
+        # Sensitive tools that must be confirmed by a human before they run.
+        # The app wires ``approval_callback`` to an in-app dialog; contexts
+        # without a callback (e.g. gateway) keep the previous behavior.
+        self.approval_callback = approval_callback
+        self._approval_tools = frozenset(
+            approval_tools if approval_tools is not None else {"terminal", "process"}
+        )
         self.process_registry = MobileProcessRegistry()
         # Active project workspace (set by project_switch / the artifacts view).
         # File tools resolve relative paths and extra sandbox roots against it.
@@ -573,6 +582,15 @@ class MobileAgent:
 
     async def _execute_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
         """Execute a tool by name"""
+        # Sensitive tools (shell terminal/process) need explicit user approval
+        # before anything runs when an approval callback is wired.
+        if name in self._approval_tools and self.approval_callback is not None:
+            approved = await self.approval_callback(name, arguments)
+            if not approved:
+                raise PermissionError(
+                    f"Tool '{name}' was not approved by the user; nothing was executed."
+                )
+
         # Check built-in tools first
         if name in self._builtin_tools:
             return await self._builtin_tools[name](**arguments)

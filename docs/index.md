@@ -34,6 +34,7 @@ Hermes Mobile puts a full AI agent on your phone. It's not a ChatGPT wrapper —
 - [Building from Source](building) — compile your own APK
 - [Architecture](ARCHITECTURE) — module map and end-to-end request flows
 - [Memory & harness schema](memory-harness-schema) — current SQL schema, agent harness, Claude prompt for a better design, comparison vs hermes-agent (Nous)
+- [Memory Harness v2 gap analysis](memory-harness-v2-gap) — review of the v2 design draft: must-fix bugs, scope cuts, simplifications, and alignment with the existing codebase (hand to the schema's author AI)
 - [Screenshots](screenshots) — real APK screenshots, no mockups
 
 ---

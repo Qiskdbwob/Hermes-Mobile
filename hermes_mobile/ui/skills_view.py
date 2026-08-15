@@ -50,7 +50,7 @@ class SkillsView:
                 spacing=0,
                 tight=True,
             )
-            subtitle = "Installed in the connected Remote profile"
+            subtitle = t("skills.remote_subtitle")
         else:
             actions = ft.Row(
                 [
@@ -124,7 +124,7 @@ class SkillsView:
                 self.remote_error,
                 ft.Icons.CLOUD_OFF_OUTLINED,
                 flat_button(
-                    "Retry",
+                    t("skills.retry"),
                     ft.Icons.REFRESH,
                     self._on_refresh_remote,
                     primary=True,
@@ -134,8 +134,8 @@ class SkillsView:
         if not self.remote_skills:
             return empty_state(
                 self.app.dark_mode,
-                "No Remote skills found",
-                "The connected profile reported an empty skills catalog.",
+                t("skills.no_remote"),
+                t("skills.no_remote_hint"),
                 ft.Icons.EXTENSION_OFF_OUTLINED,
             )
         return ft.ListView(
@@ -151,7 +151,7 @@ class SkillsView:
         description = str(skill.get("description") or category)
         return flat_list_row(
             self.app.dark_mode,
-            str(skill.get("name") or "Unnamed skill"),
+            str(skill.get("name") or t("skills.unnamed")),
             description,
             ft.Icon(ft.Icons.EXTENSION_OUTLINED, size=19, color=c["primary"]),
             ft.Text(category, size=11, color=c["muted_foreground"]),
@@ -211,7 +211,7 @@ class SkillsView:
                         ),
                         ft.PopupMenuItem(
                             icon=ft.Icons.DOWNLOAD_OUTLINED,
-                            content="Export",
+                            content=t("skills.export"),
                             on_click=lambda e, s=skill: self._export_skill(s),
                         ),
                         ft.PopupMenuItem(
@@ -240,8 +240,8 @@ class SkillsView:
 
     def _on_create_skill(self, e):
         """Show create skill dialog"""
-        name_field = ft.TextField(label="Skill Name", hint_text="my_skill")
-        desc_field = ft.TextField(label="Description", hint_text="What does this skill do?")
+        name_field = ft.TextField(label=t("skills.skill_name"), hint_text=t("skills.name_hint"))
+        desc_field = ft.TextField(label=t("skills.description"), hint_text=t("skills.desc_hint"))
 
         def create(e):
             name = name_field.value.strip()
@@ -252,18 +252,22 @@ class SkillsView:
                 self._refresh()
 
         dialog = ft.AlertDialog(
-            title=ft.Text("Create New Skill"),
+            title=ft.Text(t("skills.create_title")),
             content=ft.Column([name_field, desc_field], tight=True, spacing=12),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
-                ft.Button("Create", on_click=create),
+                ft.TextButton(
+                    t("common.cancel"), on_click=lambda e: close_dialog(self.page, dialog)
+                ),
+                ft.Button(t("skills.create"), on_click=create),
             ],
         )
         open_dialog(self.page, dialog)
 
     def _on_install_from_url(self, e):
         """Show install from URL dialog"""
-        url_field = ft.TextField(label="GitHub URL", hint_text="https://github.com/user/repo")
+        url_field = ft.TextField(
+            label=t("skills.github_url"), hint_text="https://github.com/user/repo"
+        )
 
         async def install(e):
             url = url_field.value.strip()
@@ -272,7 +276,7 @@ class SkillsView:
                 # Show loading
                 loading = ft.AlertDialog(
                     content=ft.Row(
-                        [ft.ProgressRing(), ft.Text(" Installing skill...")],
+                        [ft.ProgressRing(), ft.Text(t("skills.installing"))],
                         spacing=12,
                     ),
                 )
@@ -282,18 +286,20 @@ class SkillsView:
                 close_dialog(self.page, loading)
 
                 if skill:
-                    snack(self.page, f"Installed: {skill.name}")
+                    snack(self.page, t("skills.installed_ok", name=skill.name))
                 else:
-                    snack(self.page, "Installation failed")
+                    snack(self.page, t("skills.install_failed"), error=True)
 
                 self._refresh()
 
         dialog = ft.AlertDialog(
-            title=ft.Text("Install Skill from URL"),
+            title=ft.Text(t("skills.install_title")),
             content=url_field,
             actions=[
-                ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
-                ft.Button("Install", on_click=install),
+                ft.TextButton(
+                    t("common.cancel"), on_click=lambda e: close_dialog(self.page, dialog)
+                ),
+                ft.Button(t("skills.install"), on_click=install),
             ],
         )
         open_dialog(self.page, dialog)
@@ -312,11 +318,16 @@ class SkillsView:
 
         content = ft.Column(
             [
-                ft.Text(f"Name: {skill.name}", weight=ft.FontWeight.BOLD),
-                ft.Text(f"Source: {skill.source}"),
-                ft.Text(f"Enabled: {'Yes' if skill.enabled else 'No'}"),
+                ft.Text(t("skills.detail_name", name=skill.name), weight=ft.FontWeight.BOLD),
+                ft.Text(t("skills.detail_source", source=skill.source)),
+                ft.Text(
+                    t(
+                        "skills.detail_enabled",
+                        value=t("common.yes") if skill.enabled else t("common.no"),
+                    )
+                ),
                 ft.Divider(),
-                ft.Text("Schema:", weight=ft.FontWeight.BOLD),
+                ft.Text(t("skills.schema_label"), weight=ft.FontWeight.BOLD),
                 ft.Text(
                     str(skill.schema),
                     size=12,
@@ -331,20 +342,22 @@ class SkillsView:
 
         if info and info.get("readme"):
             content.controls.append(ft.Divider())
-            content.controls.append(ft.Text("README:", weight=ft.FontWeight.BOLD))
+            content.controls.append(ft.Text(t("skills.readme"), weight=ft.FontWeight.BOLD))
             content.controls.append(ft.Text(info["readme"], size=12, selectable=True))
 
         dialog = ft.AlertDialog(
-            title=ft.Text(f"Skill: {skill.name}"),
+            title=ft.Text(t("skills.skill_title", name=skill.name)),
             content=ft.Container(content=content, width=400, height=500),
-            actions=[ft.TextButton("Close", on_click=lambda e: close_dialog(self.page, dialog))],
+            actions=[
+                ft.TextButton(t("common.close"), on_click=lambda e: close_dialog(self.page, dialog))
+            ],
         )
         open_dialog(self.page, dialog)
 
     def _export_skill(self, skill):
         """Export skill to downloads"""
         # TODO: Implement export
-        snack(self.page, "Export not yet implemented")
+        snack(self.page, t("skills.export_todo"))
 
     def _confirm_remove_skill(self, skill):
         """Confirm skill removal"""
@@ -355,13 +368,13 @@ class SkillsView:
             self._refresh()
 
         dialog = ft.AlertDialog(
-            title=ft.Text("Remove Skill"),
-            content=ft.Text(
-                f"Are you sure you want to remove '{skill.name}'? This cannot be undone."
-            ),
+            title=ft.Text(t("skills.remove_title")),
+            content=ft.Text(t("skills.remove_confirm", name=skill.name)),
             actions=[
-                ft.TextButton("Cancel", on_click=lambda e: close_dialog(self.page, dialog)),
-                ft.Button("Remove", color=ft.Colors.ERROR, on_click=remove),
+                ft.TextButton(
+                    t("common.cancel"), on_click=lambda e: close_dialog(self.page, dialog)
+                ),
+                ft.Button(t("skills.remove"), color=ft.Colors.ERROR, on_click=remove),
             ],
         )
         open_dialog(self.page, dialog)

@@ -361,7 +361,9 @@ async def cronjob_tool(action: str, job_id: Optional[str] = None) -> Dict[str, A
     if action == "run":
         if not job_id:
             return {"error": "job_id required for run"}
-        output = sched.run_job_now(job_id)
+        # run_job_now executes a subprocess synchronously; run it off the event
+        # loop or a long job would freeze the whole UI/agent.
+        output = await asyncio.to_thread(sched.run_job_now, job_id)
         return {"job_id": job_id, "output": output.to_markdown()[:2000]}
     if action == "pause":
         if not job_id:

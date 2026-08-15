@@ -28,6 +28,7 @@ class SettingsView:
     EDITABLE_FIELDS = (
         "default_provider",
         "default_model",
+        "ollama_host",
         "temperature",
         "max_tokens",
         "stream_responses",
@@ -39,7 +40,7 @@ class SettingsView:
         "max_retries",
     )
     TAB_FIELDS = {
-        "provider": {"default_provider", "default_model"},
+        "provider": {"default_provider", "default_model", "ollama_host"},
         "agent": {"temperature", "max_tokens", "stream_responses", "show_tool_calls"},
         "memory": set(),
         "appearance": {"language", "theme", "pet_roam"},
@@ -541,18 +542,26 @@ class SettingsView:
             ),
         ]
         if keyless:
+            endpoint = ft.TextField(
+                label=t("settings.endpoint_label"),
+                hint_text="http://192.168.1.5:11434",
+                value=str(getattr(self.draft, "ollama_host", "") or ""),
+                on_change=self._on_ollama_host_change,
+            )
+            endpoint.expand = True
             url = profile.resolve_base_url() if profile else ""
             rows.insert(
                 3,
-                ft.Row(
+                ft.Column(
                     [
+                        endpoint,
                         ft.Text(
                             t("settings.api_optional_hint", url=url),
                             size=11,
                             color=ft.Colors.OUTLINE,
-                        )
+                        ),
                     ],
-                    spacing=0,
+                    spacing=2,
                 ),
             )
         return rows
@@ -650,6 +659,10 @@ class SettingsView:
         provider = str(provider).strip().lower()
         self._draft_key(provider)
         self._draft_keys[provider] = str(value or "")
+        self._mark_draft_changed()
+
+    def _on_ollama_host_change(self, e):
+        self.draft.ollama_host = str(e.control.value or "").strip()
         self._mark_draft_changed()
 
     async def _on_refresh_models(self, e=None):
@@ -924,7 +937,14 @@ class SettingsView:
             return False
 
         route_changed = bool(
-            changed_fields & {"default_provider", "default_model", "request_timeout", "max_retries"}
+            changed_fields
+            & {
+                "default_provider",
+                "default_model",
+                "request_timeout",
+                "max_retries",
+                "ollama_host",
+            }
             or changed_keys
         )
         appearance_changed = bool(changed_fields & {"language", "theme"})

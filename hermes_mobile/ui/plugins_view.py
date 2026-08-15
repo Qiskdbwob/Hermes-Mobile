@@ -4,7 +4,8 @@ from pathlib import Path
 
 import flet as ft
 
-from hermes_mobile.config.settings import get_settings
+from hermes_mobile.config.settings import get_settings, save_settings
+from hermes_mobile.locales import t
 from hermes_mobile.plugins import get_plugin_registry
 from hermes_mobile.ui.common import (
     close_dialog,
@@ -29,12 +30,12 @@ class PluginsView:
             [
                 ft.IconButton(
                     icon=ft.Icons.REFRESH,
-                    tooltip="Refresh",
+                    tooltip=t("plugins.refresh"),
                     on_click=lambda e: self._refresh(),
                 ),
                 ft.IconButton(
                     icon=ft.Icons.FOLDER_OPEN,
-                    tooltip="Open Plugin Directory",
+                    tooltip=t("plugins.open_dir"),
                     on_click=lambda e: self._open_plugin_dir(),
                 ),
             ],
@@ -45,8 +46,8 @@ class PluginsView:
             [
                 page_header(
                     self.app.dark_mode,
-                    "Plugins",
-                    f"{len(plugins)} installed extensions",
+                    t("plugins.title"),
+                    t("plugins.count", count=len(plugins)),
                     actions,
                 ),
                 ft.Container(content=self._build_plugin_list(plugins), expand=True),
@@ -63,8 +64,8 @@ class PluginsView:
         if not controls:
             return empty_state(
                 self.app.dark_mode,
-                "No plugins installed",
-                "Add plugins to the mobile plugin directory.",
+                t("plugins.no_plugins"),
+                t("plugins.plugin_dir_hint"),
                 ft.Icons.EXTENSION_OFF,
             )
         return ft.ListView(
@@ -85,14 +86,14 @@ class PluginsView:
         subtitle = f"{manifest.description}\n{metadata}"
         actions = ft.PopupMenuButton(
             icon=ft.Icons.MORE_VERT,
-            tooltip="Plugin actions",
+            tooltip=t("plugins.actions"),
             items=[
                 ft.PopupMenuItem(
-                    content=ft.Text("Details"),
+                    content=ft.Text(t("plugins.details")),
                     on_click=lambda e, m=manifest: self._show_plugin_details(m),
                 ),
                 ft.PopupMenuItem(
-                    content=ft.Text("Tools"),
+                    content=ft.Text(t("plugins.tools")),
                     on_click=lambda e, m=manifest: self._show_plugin_tools(m),
                 ),
             ],
@@ -117,19 +118,35 @@ class PluginsView:
         )
 
     def _toggle_plugin(self, manifest, enabled: bool):
-        """Toggle plugin enabled state"""
+        """Toggle plugin enabled state (persisted across restarts)"""
         plugin = self.plugin_registry.get_plugin(manifest.name)
-        if plugin:
-            plugin.enabled = enabled
-            if enabled:
-                import asyncio
+        if not plugin:
+            return
+        plugin.enabled = enabled
+        import asyncio
 
-                asyncio.create_task(plugin.initialize())
-            else:
-                import asyncio
+        async def _apply():
+            try:
+                if enabled:
+                    await plugin.initialize()
+                else:
+                    await plugin.shutdown()
+            except Exception:
+                pass
 
-                asyncio.create_task(plugin.shutdown())
-            self._refresh()
+        try:
+            asyncio.get_running_loop().create_task(_apply())
+        except RuntimeError:
+            pass  # No event loop (tests/startup): state still persisted below
+        try:
+            settings = self.app.settings
+            toggles = dict(getattr(settings, "plugin_toggles", None) or {})
+            toggles[manifest.name] = enabled
+            settings.plugin_toggles = toggles
+            save_settings(settings)
+        except Exception:
+            pass
+        self._refresh()
 
     def _show_plugin_details(self, manifest):
         """Show plugin details dialog"""
@@ -137,17 +154,19 @@ class PluginsView:
 
         content = ft.Column(
             [
-                ft.Text(f"Name: {manifest.name}", weight=ft.FontWeight.BOLD),
-                ft.Text(f"Version: {manifest.version}"),
-                ft.Text(f"Kind: {manifest.kind}"),
-                ft.Text(f"Author: {manifest.author}"),
-                ft.Text(f"Description: {manifest.description}"),
+                ft.Text(t("plugins.field_name", value=manifest.name), weight=ft.FontWeight.BOLD),
+                ft.Text(t("plugins.field_version", value=manifest.version)),
+                ft.Text(t("plugins.field_kind", value=manifest.kind)),
+                ft.Text(t("plugins.field_author", value=manifest.author)),
+                ft.Text(t("plugins.field_description", value=manifest.description)),
                 ft.Divider(),
-                ft.Text("Dependencies:", weight=ft.FontWeight.BOLD),
-                ft.Text(", ".join(manifest.dependencies) if manifest.dependencies else "None"),
+                ft.Text(t("plugins.dependencies"), weight=ft.FontWeight.BOLD),
+                ft.Text(
+                    ", ".join(manifest.dependencies) if manifest.dependencies else t("plugins.none")
+                ),
                 ft.Divider(),
-                ft.Text("Tools:", weight=ft.FontWeight.BOLD),
-                ft.Text(", ".join(plugin.get_tools()) if plugin else "None"),
+                ft.Text(t("plugins.tools_label"), weight=ft.FontWeight.BOLD),
+                ft.Text(", ".join(plugin.get_tools()) if plugin else t("plugins.none")),
             ],
             spacing=8,
             tight=True,
@@ -155,9 +174,11 @@ class PluginsView:
         )
 
         dialog = ft.AlertDialog(
-            title=ft.Text(f"Plugin: {manifest.name}"),
+            title=ft.Text(t("plugins.plugin_title", name=manifest.name)),
             content=ft.Container(content=content, width=400, height=400),
-            actions=[ft.TextButton("Close", on_click=lambda e: close_dialog(self.page, dialog))],
+            actions=[
+                ft.TextButton(t("common.close"), on_click=lambda e: close_dialog(self.page, dialog))
+            ],
         )
         open_dialog(self.page, dialog)
 
@@ -168,7 +189,7 @@ class PluginsView:
 
         content = ft.Column(
             [
-                ft.Text(f"Tools provided by {manifest.name}:", weight=ft.FontWeight.BOLD),
+                ft.Text(t("plugins.tools_provided", name=manifest.name), weight=ft.FontWeight.BOLD),
                 ft.Divider(),
                 ft.Column(
                     [
@@ -182,7 +203,7 @@ class PluginsView:
                         )
                         for tool in tools
                     ]
-                    or [ft.Text("No tools provided", color=ft.Colors.OUTLINE)],
+                    or [ft.Text(t("plugins.no_tools"), color=ft.Colors.OUTLINE)],
                     spacing=4,
                     scroll=ft.ScrollMode.AUTO,
                 ),
@@ -193,9 +214,11 @@ class PluginsView:
         )
 
         dialog = ft.AlertDialog(
-            title=ft.Text(f"Tools: {manifest.name}"),
+            title=ft.Text(t("plugins.tools_title", name=manifest.name)),
             content=ft.Container(content=content, width=500, height=400),
-            actions=[ft.TextButton("Close", on_click=lambda e: close_dialog(self.page, dialog))],
+            actions=[
+                ft.TextButton(t("common.close"), on_click=lambda e: close_dialog(self.page, dialog))
+            ],
         )
         open_dialog(self.page, dialog)
 

@@ -10,6 +10,7 @@ from hermes_mobile.cron.scheduler import (
     CronJob,
     CronOutput,
     _compute_next_run,
+    _drain_job_threads,
     _ensure_cron_dirs,
     _execute_job,
     _get_jobs_file,
@@ -243,6 +244,17 @@ class TestCronScheduler:
         with pytest.raises(ValueError, match="Job not found"):
             run_job_now("nonexistent")
 
+    def test_run_job_now_already_running(self):
+        import hermes_mobile.cron.scheduler as scheduler
+
+        job = create_job(name="Running Guard", schedule="*/5 * * * *", command="echo guard")
+        scheduler._running_jobs.add(job.id)
+        try:
+            with pytest.raises(ValueError, match="already running"):
+                run_job_now(job.id)
+        finally:
+            scheduler._running_jobs.discard(job.id)
+
     @patch("hermes_mobile.cron.scheduler.subprocess.run")
     def test_run_job_now_success(self, mock_run):
         mock_result = MagicMock()
@@ -289,6 +301,34 @@ class TestCronScheduler:
         output = _execute_job(job)
         assert output.status == "failed"
         assert "Unexpected crash" in output.stderr
+
+    @patch("hermes_mobile.cron.scheduler.subprocess.run")
+    def test_execute_job_timeout_updates_stats(self, mock_run):
+        """Timeout runs must still count towards run_count/failure_count."""
+        import subprocess
+
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="sleep", timeout=1)
+
+        job = create_job(name="Timeout Stats", schedule="*/5 * * * *", command="sleep 10")
+        _execute_job(job)
+
+        updated = get_job(job.id)
+        assert updated.last_status == "failed"
+        assert updated.run_count == 1
+        assert updated.failure_count == 1
+
+    @patch("hermes_mobile.cron.scheduler.subprocess.run")
+    def test_execute_job_exception_updates_stats(self, mock_run):
+        """Crash runs must still count towards run_count/failure_count."""
+        mock_run.side_effect = RuntimeError("Unexpected crash")
+
+        job = create_job(name="Crash Stats", schedule="*/5 * * * *", command="boom")
+        _execute_job(job)
+
+        updated = get_job(job.id)
+        assert updated.last_status == "failed"
+        assert updated.run_count == 1
+        assert updated.failure_count == 1
 
     @patch("hermes_mobile.cron.scheduler.subprocess.run")
     def test_execute_job_updates_status(self, mock_run):
@@ -407,6 +447,60 @@ class TestCronScheduler:
             # Should recover gracefully — at minimum not crash
             assert len(results) >= 1
             assert results[0].job_id == "job_bad"
+        finally:
+            scheduler._get_cron_dir = original
+
+    def test_get_job_output_parses_jsonl(self, temp_dir):
+        """get_job_output returns real structured fields from the JSONL store."""
+        import hermes_mobile.cron.scheduler as scheduler
+
+        original = scheduler._get_cron_dir
+        scheduler._get_cron_dir = lambda: temp_dir / "cron_jsonl"
+        try:
+            output = CronOutput(
+                job_id="job_jsonl",
+                timestamp="2024-01-01T00:00:00",
+                status="failed",
+                stdout="out line",
+                stderr="err line",
+                return_code=2,
+                duration=3.5,
+            )
+            _save_output("job_jsonl", output)
+            results = get_job_output("job_jsonl")
+            assert len(results) == 1
+            parsed = results[0]
+            assert parsed.job_id == "job_jsonl"
+            assert parsed.status == "failed"
+            assert parsed.stdout == "out line"
+            assert parsed.stderr == "err line"
+            assert parsed.return_code == 2
+            assert parsed.duration == 3.5
+        finally:
+            scheduler._get_cron_dir = original
+
+    def test_get_job_output_newest_first(self, temp_dir):
+        """Multiple JSONL records return newest first, capped by limit."""
+        import hermes_mobile.cron.scheduler as scheduler
+
+        original = scheduler._get_cron_dir
+        scheduler._get_cron_dir = lambda: temp_dir / "cron_jsonl_order"
+        try:
+            for i in range(3):
+                _save_output(
+                    "job_order",
+                    CronOutput(
+                        job_id="job_order",
+                        timestamp=f"2024-01-0{i + 1}T00:00:00",
+                        status="success",
+                        stdout=f"run {i}",
+                        stderr="",
+                        return_code=0,
+                        duration=0.1,
+                    ),
+                )
+            results = get_job_output("job_order", limit=2)
+            assert [r.stdout for r in results] == ["run 2", "run 1"]
         finally:
             scheduler._get_cron_dir = original
 
@@ -558,6 +652,7 @@ class TestTicker:
         _save_jobs({"due_job": job})
 
         _tick()
+        _drain_job_threads()
         mock_execute.assert_called_once_with(job)
 
     @patch("hermes_mobile.cron.scheduler._execute_job")
@@ -585,7 +680,27 @@ class TestTicker:
         _save_jobs({"oneshot_due": job})
 
         _tick()
+        _drain_job_threads()
         mock_execute.assert_called_once()
+
+    @patch("hermes_mobile.cron.scheduler._execute_job")
+    def test_tick_skips_already_running_job(self, mock_execute):
+        import hermes_mobile.cron.scheduler as scheduler
+
+        _ensure_cron_dirs()
+        job = CronJob(
+            id="running_job",
+            name="Running Job",
+            schedule="* * * * *",
+            command="echo running",
+        )
+        job.next_run = "2020-01-01T00:00:00"
+        _save_jobs({"running_job": job})
+        scheduler._running_jobs.add("running_job")
+
+        _tick()
+        _drain_job_threads()
+        mock_execute.assert_not_called()
 
     @patch("hermes_mobile.cron.scheduler._execute_job")
     def test_tick_oneshot_with_last_run(self, mock_execute):

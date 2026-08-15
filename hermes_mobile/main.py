@@ -28,7 +28,7 @@ from hermes_mobile.skills.manager import MobileSkillManager
 from hermes_mobile.ui.artifacts_view import ArtifactsView
 from hermes_mobile.ui.browser_view import BrowserView
 from hermes_mobile.ui.chat_view import ChatView
-from hermes_mobile.ui.common import brand_mark, snack, status_dot
+from hermes_mobile.ui.common import brand_mark, close_dialog, open_dialog, snack, status_dot
 from hermes_mobile.ui.composer_state import ComposerStateStore
 from hermes_mobile.ui.cron_view import CronView
 from hermes_mobile.ui.gateway_view import GatewayView
@@ -266,6 +266,7 @@ class HermesMobileApp:
             on_tool_call=self._on_tool_call,
             on_tool_result=self._on_tool_result,
             on_message=self._on_message,
+            approval_callback=self._request_tool_approval,
         )
 
         # Initialize plugin registry
@@ -295,6 +296,18 @@ class HermesMobileApp:
         self.gateway_view = GatewayView(self)
         self.plugins_view = PluginsView(self)
         self.tools_view = ToolsView(self)
+
+        # Re-apply persisted on/off states so disabled toolsets and plugins
+        # stay disabled across restarts.
+        try:
+            self.tools_view.apply_persisted()
+            for name, enabled in dict(self.settings.plugin_toggles or {}).items():
+                plugin = self.plugin_registry.get_plugin(name)
+                if plugin is not None and plugin.enabled != enabled:
+                    plugin.enabled = enabled
+        except Exception as exc:
+            logger.warning("Failed to re-apply persisted toggles: %s", exc)
+
         self.artifacts_view = ArtifactsView(self)
         self.browser_view = BrowserView(self)
         self.terminal_view = TerminalView(self)
@@ -1144,6 +1157,65 @@ class HermesMobileApp:
         """Handle new message from agent"""
         if self.chat_view:
             self.chat_view.on_message(message)
+
+    async def _request_tool_approval(self, tool_name: str, arguments: dict) -> bool:
+        """Ask the user to approve a sensitive tool call (terminal/process).
+
+        Returns True when approved; a denial resolves to False so the agent
+        surfaces an error instead of executing the command.
+        """
+        if self.page is None:
+            return True
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[bool] = loop.create_future()
+
+        preview = json.dumps(arguments, ensure_ascii=False, indent=2)[:600]
+
+        def resolve(value: bool):
+            close_dialog(self.page, dialog)
+            if not future.done():
+                future.set_result(value)
+
+        dialog = ft.AlertDialog(
+            title=ft.Text(t("chat.approve_tool_title", tool=tool_name)),
+            content=ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text(
+                            t("chat.approve_tool_prompt", tool=tool_name),
+                            size=14,
+                            selectable=True,
+                        ),
+                        ft.Container(
+                            content=ft.Text(
+                                preview,
+                                size=12,
+                                font_family="monospace",
+                                selectable=True,
+                            ),
+                            padding=12,
+                            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+                            border_radius=10,
+                        ),
+                        ft.Text(
+                            t("chat.approve_tool_hint"),
+                            size=12,
+                            color=ft.Colors.OUTLINE,
+                        ),
+                    ],
+                    tight=True,
+                    spacing=12,
+                ),
+                width=420,
+            ),
+            actions=[
+                ft.TextButton(t("chat.deny"), on_click=lambda e: resolve(False)),
+                ft.Button(t("chat.approve"), on_click=lambda e: resolve(True)),
+            ],
+            modal=True,
+        )
+        open_dialog(self.page, dialog)
+        return await future
 
     async def _handle_slash_command(self, text: str):
         """Process slash commands locally, matching Hermes Desktop parity."""

@@ -365,8 +365,12 @@ def run_job_now(job_id: str) -> CronOutput:
     job = get_job(job_id)
     if not job:
         raise ValueError(f"Job not found: {job_id}")
-
-    return _execute_job(job)
+    if not _mark_job_running(job.id):
+        raise ValueError(f"Job '{job.name}' is already running")
+    try:
+        return _execute_job(job)
+    finally:
+        _mark_job_done(job.id)
 
 
 def _execute_job(job: CronJob) -> CronOutput:
@@ -436,7 +440,13 @@ def _execute_job(job: CronJob) -> CronOutput:
             duration=duration,
         )
         _save_output(job.id, output)
-        update_job(job.id, last_status="failed", last_output=output.to_markdown()[:5000])
+        update_job(
+            job.id,
+            last_status="failed",
+            last_output=output.to_markdown()[:5000],
+            run_count=job.run_count + 1,
+            failure_count=job.failure_count + 1,
+        )
         return output
 
     except Exception as e:
@@ -451,12 +461,23 @@ def _execute_job(job: CronJob) -> CronOutput:
             duration=duration,
         )
         _save_output(job.id, output)
-        update_job(job.id, last_status="failed", last_output=output.to_markdown()[:5000])
+        update_job(
+            job.id,
+            last_status="failed",
+            last_output=output.to_markdown()[:5000],
+            run_count=job.run_count + 1,
+            failure_count=job.failure_count + 1,
+        )
         return output
 
 
 def _save_output(job_id: str, output: CronOutput) -> None:
-    """Save job output to file."""
+    """Save job output to file.
+
+    Each run is stored twice: a human-readable markdown file (unchanged) and an
+    append-only JSONL record that get_job_output() can parse back into real
+    structured fields (status, stdout, stderr, return code, duration).
+    """
     job_output_dir = _get_output_dir() / job_id
     job_output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -468,18 +489,39 @@ def _save_output(job_id: str, output: CronOutput) -> None:
     except Exception as e:
         logger.error(f"Failed to save cron output: {e}")
 
+    try:
+        jsonl_file = job_output_dir / "output.jsonl"
+        with open(jsonl_file, "a") as f:
+            f.write(json.dumps(output.__dict__) + "\n")
+    except Exception as e:
+        logger.error(f"Failed to save cron output record: {e}")
+
 
 def get_job_output(job_id: str, limit: int = 10) -> List[CronOutput]:
-    """Get recent output for a job."""
+    """Get recent output for a job (newest first)."""
     job_output_dir = _get_output_dir() / job_id
     if not job_output_dir.exists():
         return []
 
-    outputs = []
+    jsonl_file = job_output_dir / "output.jsonl"
+    outputs: List[CronOutput] = []
+    if jsonl_file.exists():
+        try:
+            lines = [ln for ln in jsonl_file.read_text().splitlines() if ln.strip()]
+            for line in lines[-limit:]:
+                try:
+                    outputs.append(CronOutput(**json.loads(line)))
+                except Exception:
+                    continue
+            outputs.reverse()
+            return outputs
+        except Exception as e:
+            logger.error(f"Failed to read cron output records: {e}")
+
+    # Legacy fallback: pre-JSONL runs are stored as markdown files only.
     for output_file in sorted(job_output_dir.glob("*.md"), reverse=True)[:limit]:
         try:
             content = output_file.read_text()
-            # Parse markdown back to CronOutput (simplified)
             outputs.append(
                 CronOutput(
                     job_id=job_id,
@@ -504,6 +546,64 @@ def get_job_output(job_id: str, limit: int = 10) -> List[CronOutput]:
 _ticker_thread: Optional[threading.Thread] = None
 _ticker_stop_event = threading.Event()
 _ticker_running = False
+
+# In-process bookkeeping so the ticker never double-runs a job that is
+# already executing (ticker vs manual "Run now"), and so a long job cannot
+# block the ticker loop (each due job runs on its own daemon thread).
+_running_jobs: set[str] = set()
+_running_jobs_lock = threading.Lock()
+_job_threads: list[threading.Thread] = []
+_job_threads_lock = threading.Lock()
+
+
+def _is_job_running(job_id: str) -> bool:
+    with _running_jobs_lock:
+        return job_id in _running_jobs
+
+
+def _mark_job_running(job_id: str) -> bool:
+    """Mark a job as running. Returns False if it is already running."""
+    with _running_jobs_lock:
+        if job_id in _running_jobs:
+            return False
+        _running_jobs.add(job_id)
+        return True
+
+
+def _mark_job_done(job_id: str) -> None:
+    with _running_jobs_lock:
+        _running_jobs.discard(job_id)
+
+
+def _drain_job_threads(timeout: float = 30.0) -> None:
+    """Join dispatched job threads (used by tests to settle async execution)."""
+    with _job_threads_lock:
+        threads = list(_job_threads)
+        _job_threads.clear()
+    for thread in threads:
+        thread.join(timeout=timeout)
+
+
+def _dispatch_job(job: CronJob) -> None:
+    """Run a due job on its own daemon thread, skipping if already running."""
+    if not _mark_job_running(job.id):
+        logger.warning("Cron job %s is already running; skipping duplicate run", job.id)
+        return
+
+    def _run():
+        try:
+            _execute_job(job)
+        finally:
+            _mark_job_done(job.id)
+
+    thread = threading.Thread(
+        target=_run,
+        daemon=True,
+        name=f"cron-{job.id}",
+    )
+    with _job_threads_lock:
+        _job_threads.append(thread)
+    thread.start()
 
 
 def _ticker_loop():
@@ -543,14 +643,14 @@ def _tick():
         if job.schedule == "oneshot":
             # Oneshot jobs run once when created
             if job.last_run is None:
-                _execute_job(job)
+                _dispatch_job(job)
             continue
 
         if job.next_run:
             try:
                 next_run = datetime.fromisoformat(job.next_run)
                 if next_run <= now:
-                    _execute_job(job)
+                    _dispatch_job(job)
             except Exception as e:
                 logger.error(f"Error checking job {job.id}: {e}")
 

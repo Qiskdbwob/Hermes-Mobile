@@ -320,21 +320,31 @@ class OllamaProfile(ProviderProfile):
         return "ollama-local"
 
     @staticmethod
-    def _host_from_env() -> str:
-        """OLLAMA_HOST (http://host:port) overrides the default local endpoint."""
+    def _host() -> str:
+        """Resolve the Ollama host: user-edited setting > OLLAMA_HOST env > local default."""
+        try:
+            from hermes_mobile.config.settings import get_settings
+
+            configured = str(get_settings().ollama_host or "").strip()
+        except Exception:
+            configured = ""
+        if configured:
+            return configured.rstrip("/")
         return os.environ.get("OLLAMA_HOST", "").strip().rstrip("/")
 
+    @staticmethod
+    def _normalize_base(host: str) -> str:
+        """Accept either a bare host or a full .../v1 endpoint."""
+        host = (host or "").strip().rstrip("/")
+        if host.endswith("/v1"):
+            host = host[: -len("/v1")].rstrip("/")
+        return host or "http://localhost:11434"
+
     def resolve_base_url(self) -> str:
-        host = self._host_from_env()
-        if host:
-            return f"{host}/v1"
-        return self.base_url
+        return f"{self._normalize_base(self._host())}/v1"
 
     def resolve_models_url(self) -> str:
-        host = self._host_from_env()
-        if host:
-            return f"{host}/api/tags"
-        return self.models_url
+        return f"{self._normalize_base(self._host())}/api/tags"
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -71,6 +71,9 @@ class PluginRegistry:
         self._plugins: Dict[str, BasePlugin] = {}
         self._manifests: Dict[str, PluginManifest] = {}
         self._plugin_dirs: List[Path] = []
+        # Plugin instance configs, keyed by plugin name. External plugins are
+        # instantiated with the config matching their manifest name.
+        self.config: Dict[str, Any] = {}
 
     def add_plugin_dir(self, path: Path):
         """Add a directory to search for plugins."""
@@ -347,6 +350,14 @@ def get_plugin_registry() -> PluginRegistry:
         settings = get_settings()
         _plugin_registry.add_plugin_dir(Path(settings.data_dir) / "plugins")
         _plugin_registry.add_plugin_dir(Path(__file__).parent.parent / "plugins")
+
+        # Discover external plugins (user-installed packages with plugin.yaml).
+        # Previously discovery was never invoked, so plugins dropped into
+        # data_dir/plugins were silently ignored.
+        try:
+            _plugin_registry.discover_plugins()
+        except Exception as e:
+            logger.warning(f"Plugin discovery failed: {e}")
 
         # Register built-in plugins
         _plugin_registry._plugins["achievements"] = AchievementsPlugin({})

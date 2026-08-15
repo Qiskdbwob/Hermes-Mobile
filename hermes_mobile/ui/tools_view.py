@@ -1,7 +1,10 @@
 """Tools View - Toolset management interface"""
 
+import logging
+
 import flet as ft
 
+from hermes_mobile.config.settings import save_settings
 from hermes_mobile.toolsets import (
     get_all_toolsets,
     get_tool_schemas,
@@ -18,6 +21,8 @@ from hermes_mobile.ui.common import (
     snack,
 )
 from hermes_mobile.ui.theme import mode_colors
+
+logger = logging.getLogger(__name__)
 
 
 class ToolsView:
@@ -190,7 +195,7 @@ class ToolsView:
         )
 
     def _toggle_toolset(self, name: str, enable: bool):
-        """Enable or disable a toolset for the agent.
+        """Enable or disable a toolset for the agent and persist the choice.
 
         Only tools with a real handler are ever added to the model's tool list;
         desktop-only schemas (x_search, browser_scroll, ...) are skipped.
@@ -199,6 +204,26 @@ class ToolsView:
         if agent is None or not hasattr(agent, "set_tools"):
             snack(self.page, "Agent not available", error=True)
             return
+
+        added, removed = self._apply_toolset(name, enable)
+        if enable:
+            snack(
+                self.page,
+                f"Enabled toolset: {name} ({added} tools added, {len([t for t in get_toolset(name) if t in self._implemented_names()]) - added} already active)",
+            )
+        else:
+            snack(self.page, f"Disabled toolset: {name} ({removed} tools removed)")
+        self._persist_toggle(name, enable)
+        self._refresh()
+
+    def _apply_toolset(self, name: str, enable: bool) -> tuple[int, int]:
+        """Add/remove a toolset's implementable schemas from the agent's tool list.
+
+        Returns (added, removed) so callers can report or persist the change.
+        """
+        agent = self.agent
+        if agent is None or not hasattr(agent, "set_tools"):
+            return 0, 0
 
         available = [tool for tool in get_toolset(name) if tool in self._implemented_names()]
         current = list(getattr(agent, "tools", None) or [])
@@ -214,22 +239,36 @@ class ToolsView:
                     current_names.add(tool_name)
                     added += 1
             agent.set_tools(current)
-            snack(
-                self.page,
-                f"Enabled toolset: {name} ({added} tools added, {len(available) - added} already active)",
-            )
-        else:
-            removed = 0
-            kept = []
-            for schema in current:
-                fn = schema.get("function", {})
-                if isinstance(fn, dict) and fn.get("name") in available:
-                    removed += 1
-                else:
-                    kept.append(schema)
-            agent.set_tools(kept)
-            snack(self.page, f"Disabled toolset: {name} ({removed} tools removed)")
-        self._refresh()
+            return added, 0
+
+        removed = 0
+        kept = []
+        for schema in current:
+            fn = schema.get("function", {})
+            if isinstance(fn, dict) and fn.get("name") in available:
+                removed += 1
+            else:
+                kept.append(schema)
+        agent.set_tools(kept)
+        return 0, removed
+
+    def _persist_toggle(self, name: str, enable: bool) -> None:
+        """Persist a toolset toggle so it survives app restarts."""
+        try:
+            settings = self.app.settings
+            toggles = dict(getattr(settings, "toolset_toggles", None) or {})
+            toggles[name] = enable
+            settings.toolset_toggles = toggles
+            save_settings(settings)
+        except Exception:
+            logger.exception("Could not persist toolset toggle")
+
+    def apply_persisted(self) -> None:
+        """Re-apply persisted toolset toggles to the agent at startup."""
+        toggles = dict(getattr(self.app.settings, "toolset_toggles", None) or {})
+        for name, enabled in toggles.items():
+            if not enabled:
+                self._apply_toolset(name, False)
 
     def _show_toolset_details(self, name: str):
         """Show toolset details dialog"""
