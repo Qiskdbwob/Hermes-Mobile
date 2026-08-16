@@ -93,7 +93,7 @@ hermes_mobile/
 │   ├── security.py                 # AST-based safe math evaluator (no eval)
 │   └── web_tools.py                # DDG search, web_extract, browser_* tools
 ├── providers/__init__.py           # ProviderProfile + 9 profiles (openrouter…ollama)
-├── cron/                           # scheduler + 4 default jobs + scripts
+├── cron/                           # scheduler + 3 default jobs + scripts
 ├── gateway/
 │   ├── mobile_gateway.py           # PairingManager, GatewayManager, StreamConsumer, BasePlatformAdapter
 │   └── telegram_adapter.py         # Telegram long-polling adapter

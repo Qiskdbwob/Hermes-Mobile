@@ -147,6 +147,17 @@ Ollama is fully local and keyless — the endpoint defaults to
 so LAN Ollama servers work on Android. Anthropic uses the native Messages API;
 that client path is remote-only for now and is not offered in the local agent.
 
+### API decision: OpenAI-compatible Chat Completions
+
+This project deliberately targets the **OpenAI-compatible Chat Completions
+contract** rather than OpenAI's newer Responses/Agents API. That is a conscious
+trade-off, not an accident: every non-OpenAI provider this app supports
+(OpenRouter, Groq, Together, DeepSeek, xAI, and local Ollama endpoints) speaks
+Chat Completions, and keeping one request path is what makes a single agent
+work across all of them from a phone. It is **not** a bug if a provider profile
+says a setting is supported but the request builder does not send it — the
+request builder is the only path, and provider hooks are applied there.
+
 ---
 
 ## Security model

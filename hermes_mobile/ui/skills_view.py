@@ -1,5 +1,8 @@
 """Skills View - Skill management interface"""
 
+import logging
+import shutil
+from pathlib import Path
 from typing import Any, Mapping
 
 import flet as ft
@@ -16,6 +19,8 @@ from hermes_mobile.ui.common import (
     snack,
 )
 from hermes_mobile.ui.theme import mode_colors
+
+logger = logging.getLogger(__name__)
 
 
 class SkillsView:
@@ -355,9 +360,33 @@ class SkillsView:
         open_dialog(self.page, dialog)
 
     def _export_skill(self, skill):
-        """Export skill to downloads"""
-        # TODO: Implement export
-        snack(self.page, t("skills.export_todo"))
+        """Export a skill package to the app's data dir (exports/).
+
+        Android has no writable "Downloads" without extra permissions; the
+        exports dir is app-private and always writable. File and package
+        skills are both supported.
+        """
+        try:
+            src = Path(skill.path) if getattr(skill, "path", None) else None
+            if src is None or not src.exists():
+                snack(self.page, t("skills.export_failed"), error=True)
+                return
+            export_dir = Path(self.app.settings.get_data_dir()) / "exports"
+            export_dir.mkdir(parents=True, exist_ok=True)
+            dest = export_dir / skill.name
+            if dest.exists():
+                if dest.is_dir():
+                    shutil.rmtree(dest)
+                else:
+                    dest.unlink()
+            if src.is_file():
+                shutil.copy2(src, dest)
+            else:
+                shutil.copytree(src, dest)
+            snack(self.page, t("skills.exported_ok", path=str(dest)))
+        except Exception as exc:
+            logger.warning("Skill export failed for %r: %s", getattr(skill, "name", "?"), exc)
+            snack(self.page, t("skills.export_failed"), error=True)
 
     def _confirm_remove_skill(self, skill):
         """Confirm skill removal"""

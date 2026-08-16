@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -77,3 +78,35 @@ async def test_remote_skills_offline_state_is_explicit(tmp_path):
     assert view.remote_skills == []
     assert "Connect to Hermes Remote" in view.remote_error
     assert "Remote skills unavailable" in _text_values(view.build())
+
+
+def test_export_skill_copies_package_to_exports_dir(tmp_path):
+    skill_dir = tmp_path / "skills" / "my_skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "main.py").write_text("async def execute(query): return query")
+    (skill_dir / "skill.yaml").write_text("name: my_skill")
+
+    app = make_app(tmp_path, None)
+    view = SkillsView(app)
+    skill = SimpleNamespace(name="my_skill", path=str(skill_dir))
+
+    with patch("hermes_mobile.ui.skills_view.snack") as mock_snack:
+        view._export_skill(skill)
+
+    dest = tmp_path / "exports" / "my_skill"
+    assert (dest / "main.py").read_text() == "async def execute(query): return query"
+    assert (dest / "skill.yaml").exists()
+    mock_snack.assert_called_once()
+    assert "exports" in str(mock_snack.call_args[0][1])
+
+
+def test_export_skill_missing_source_reports_error(tmp_path):
+    app = make_app(tmp_path, None)
+    view = SkillsView(app)
+    skill = SimpleNamespace(name="ghost", path=str(tmp_path / "nope"))
+
+    with patch("hermes_mobile.ui.skills_view.snack") as mock_snack:
+        view._export_skill(skill)
+
+    mock_snack.assert_called_once()
+    assert mock_snack.call_args.kwargs.get("error") is True

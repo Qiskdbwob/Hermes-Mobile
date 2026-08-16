@@ -17,7 +17,7 @@ Hermes Mobile runs the same agent core concept as Hermes Desktop — an OpenAI-c
 - **9 Provider Profiles** — OpenRouter, OpenAI, Anthropic, Google, Groq, Together, DeepSeek, xAI, Ollama
 - **Gateway System** — Code-based pairing flow, Telegram bot adapter, extensible platform adapters
 - **Plugin System** — ABC-based plugin registry with discovery, config schemas
-- **Cron Scheduler** — JSON-backed job persistence, ticker-based execution, 4 default jobs
+- **Cron Scheduler** — JSON-backed job persistence, ticker-based execution, 3 default jobs
 - **i18n** — English and Portuguese (pt-br) locale system, dot-notation key lookup
 - **Context Compression** — Token estimation + mid-conversation summarization (placeholder-based)
 - **Prompt Caching** — Anthropic/OpenRouter cache breakpoints for cost savings (~90% on system prompt)
@@ -56,8 +56,7 @@ hermes_mobile/
 │   ├── scheduler.py             # CronJob, CronScheduler ticker, JSON persistence
 │   ├── backup_data.py           # Daily backup cron script
 │   ├── check_updates.py         # Daily update check cron script
-│   ├── cleanup_memory.py        # Daily memory cleanup cron script
-│   └── sync_conversations.py    # Conversation sync cron script (TODO)
+│   └── cleanup_memory.py        # Daily memory cleanup cron script
 ├── gateway/
 │   ├── mobile_gateway.py        # GatewayManager, PairingManager, StreamConsumer, BasePlatformAdapter
 │   └── telegram_adapter.py      # Telegram long-polling bot adapter
@@ -166,7 +165,7 @@ Each provider is a `ProviderProfile` dataclass with:
 - Background ticker thread (60s interval)
 - Supports cron expressions via `croniter` (optional, graceful fallback) and "oneshot" schedules
 - Run-history stored as JSONL in `cron/output/`
-- 4 default jobs: cleanup memory (daily 3am), sync conversations (every 15min), check updates (daily noon), backup data (daily 4am)
+- 3 default jobs: cleanup memory (daily 3am), check updates (daily noon), backup data (daily 4am)
 
 ---
 

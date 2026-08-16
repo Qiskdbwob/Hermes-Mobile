@@ -749,13 +749,6 @@ DEFAULT_JOBS = [
         "tags": ["maintenance", "memory"],
     },
     {
-        "name": "sync_conversations",
-        "schedule": "*/15 * * * *",  # Every 15 minutes
-        "command": f'"{_PYTHON}" -m hermes_mobile.cron.sync_conversations',
-        "description": "Sync conversations to cloud",
-        "tags": ["sync", "cloud"],
-    },
-    {
         "name": "check_updates",
         "schedule": "0 12 * * *",  # Daily at noon
         "command": f'"{_PYTHON}" -m hermes_mobile.cron.check_updates',
