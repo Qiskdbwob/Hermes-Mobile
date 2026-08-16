@@ -1,12 +1,15 @@
 """Mobile Memory Provider - SQLite-based with encryption support"""
 
 import base64
+import functools
 import hashlib
+import inspect
 import json
 import logging
 import os
 import platform
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -44,6 +47,31 @@ MEMORY_TTL_DAYS: Dict[str, Optional[int]] = {
 _SEARCH_WINDOW = 25
 
 
+# Write-path serialization for the shared single connection. All async callers
+# share one sqlite connection (check_same_thread=False); a background thread or
+# cron-triggered writer could otherwise interleave multi-statement writes.
+# Reads are lock-free (sqlite serializes them; a second connection in another
+# process waits via the busy timeout on connect).
+def _locked(fn):
+    """Serialize DB write methods across threads (works for sync + async)."""
+
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def _async_wrapper(self, *args, **kwargs):
+            with self._lock:
+                return await fn(self, *args, **kwargs)
+
+        return _async_wrapper
+
+    @functools.wraps(fn)
+    def _sync_wrapper(self, *args, **kwargs):
+        with self._lock:
+            return fn(self, *args, **kwargs)
+
+    return _sync_wrapper
+
+
 class MobileMemoryProvider:
     """SQLite-based memory provider for mobile with optional encryption"""
 
@@ -57,6 +85,9 @@ class MobileMemoryProvider:
         self.encrypt = encrypt
         self._conn: Optional[sqlite3.Connection] = None
         self._fernet: Optional[Fernet] = None
+        # Serializes write methods (see _locked). RLock so nested providers /
+        # re-entrant calls from the same thread never deadlock.
+        self._lock = threading.RLock()
         self._legacy_fernet: Optional[Fernet] = None
 
         if encrypt:
@@ -138,7 +169,7 @@ class MobileMemoryProvider:
         """Initialize database schema"""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=10.0)
         self._conn.row_factory = sqlite3.Row
 
         cursor = self._conn.cursor()
@@ -304,6 +335,7 @@ class MobileMemoryProvider:
             self._init_db()
         return self._conn
 
+    @_locked
     async def save_conversation(self, session_id: str, messages: List[Any]):
         """Save conversation messages"""
         conn = self._get_conn()
@@ -490,6 +522,7 @@ class MobileMemoryProvider:
             )
         return entries
 
+    @_locked
     async def add_memory_entry(
         self,
         session_id: str,
@@ -558,6 +591,7 @@ class MobileMemoryProvider:
         ]
         return "\n\n".join(context_parts)
 
+    @_locked
     async def store_memory(self, key: str, value: str, ttl_days: Optional[int] = None) -> None:
         """Store a key/value entry in long-term memory (upsert by key)."""
         now = datetime.now().isoformat()
@@ -619,6 +653,7 @@ class MobileMemoryProvider:
             )
         return entries
 
+    @_locked
     async def delete_memory(self, key: str) -> bool:
         """Delete the entry stored under *key*. Returns True if it existed."""
         conn = self._get_conn()
@@ -662,6 +697,7 @@ class MobileMemoryProvider:
         results.sort(key=lambda x: x["score"], reverse=True)
         return results[:limit]
 
+    @_locked
     async def index_session_keywords(self, session_id: str, keywords: List[str]) -> None:
         """(Re)build the plaintext keyword index for a session.
 
@@ -839,6 +875,7 @@ class MobileMemoryProvider:
         results.sort(key=lambda r: (r["score"], r["timestamp"] or ""), reverse=True)
         return results[:limit]
 
+    @_locked
     async def set_skill_memory(
         self, skill_name: str, key: str, value: Any, ttl_days: Optional[int] = None
     ):
@@ -898,6 +935,7 @@ class MobileMemoryProvider:
         except json.JSONDecodeError:
             return value
 
+    @_locked
     async def cleanup_expired(self):
         """Clean up expired memory entries"""
         conn = self._get_conn()
@@ -988,6 +1026,7 @@ class MobileMemoryProvider:
         """
         return hashlib.sha256(MobileMemoryProvider._normalize_text(text).encode()).hexdigest()
 
+    @_locked
     async def insert_memory_item(
         self,
         *,
@@ -1070,6 +1109,7 @@ class MobileMemoryProvider:
             "content": self._decrypt(row["content"]) if self.encrypt else row["content"],
         }
 
+    @_locked
     async def add_memory_evidence(
         self,
         memory_id: str,
@@ -1208,6 +1248,7 @@ class MobileMemoryProvider:
             limit=limit,
         )
 
+    @_locked
     async def update_memory_status(self, memory_id: str, status: str) -> bool:
         """Move a memory item to a new status. Returns True if it existed."""
         conn = self._get_conn()
@@ -1219,6 +1260,7 @@ class MobileMemoryProvider:
         conn.commit()
         return cursor.rowcount > 0
 
+    @_locked
     async def delete_memory_item(self, memory_id: str) -> bool:
         """Hard-delete a memory item together with its evidence records."""
         conn = self._get_conn()
@@ -1228,6 +1270,7 @@ class MobileMemoryProvider:
         conn.commit()
         return cursor.rowcount > 0
 
+    @_locked
     async def supersede_memory(self, old_id: str, new_id: str) -> bool:
         """Mark an old memory as superseded by a newer one."""
         conn = self._get_conn()
@@ -1254,6 +1297,7 @@ class MobileMemoryProvider:
             return None
         return self._decrypt(row["summary"]) if self.encrypt else row["summary"]
 
+    @_locked
     async def upsert_session_summary(
         self,
         session_id: str,
@@ -1288,6 +1332,7 @@ class MobileMemoryProvider:
             )
         conn.commit()
 
+    @_locked
     async def consolidate_memories(self) -> Dict[str, int]:
         """Lightweight consolidation: expire stale entries and drop unconfirmed
         candidates past their TTL. Runs on demand at lifecycle points (session
@@ -1342,6 +1387,7 @@ class MobileMemoryProvider:
             self._conn.close()
             self._conn = None
 
+    @_locked
     def clear_all(self):
         """Delete all conversations, memory and session data."""
         conn = self._get_conn()

@@ -88,10 +88,18 @@ async def search_files_tool(
     extra_dirs: Optional[List[Path]] = None,
     base_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Search file contents (regex) or filenames (glob) under a directory."""
+    """Search file contents (regex) or filenames (glob) under a directory.
+
+    The walk/read/scan is CPU + filesystem bound and runs in a worker thread so
+    a large workspace never blocks the agent's event loop (Android low-end).
+    """
     if target == "files":
-        return _search_filenames(pattern, path, limit, extra_dirs, base_dir)
-    return _search_content(pattern, path, file_glob, limit, extra_dirs, base_dir)
+        return await asyncio.to_thread(
+            _search_filenames, pattern, path, limit, extra_dirs, base_dir
+        )
+    return await asyncio.to_thread(
+        _search_content, pattern, path, file_glob, limit, extra_dirs, base_dir
+    )
 
 
 def _search_content(

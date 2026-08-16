@@ -102,6 +102,79 @@ HERMES_CORE_TOOLS = [
 ]
 
 
+# Tools declared in the desktop taxonomy that are intentionally NOT
+# implemented in this mobile build. They are never advertised to the model
+# (the UI shows them as "0/x implementable"). Kept explicit so the registry
+# stays a single source of truth: registry_integrity() fails if this set ever
+# drifts from reality.
+HERMES_UNIMPLEMENTED_TOOLS = frozenset(
+    {
+        "browser_cdp",
+        "browser_console",
+        "browser_dialog",
+        "browser_press",
+        "browser_vision",
+        "computer_use",
+        "ha_call_service",
+        "ha_get_state",
+        "ha_list_entities",
+        "ha_list_services",
+        "kanban_attach",
+        "kanban_attach_url",
+        "kanban_attachments",
+        "kanban_heartbeat",
+        "kanban_link",
+        "text_to_speech",
+        "video_analyze",
+        "video_generate",
+        "x_search",
+    }
+)
+
+# Builtin handlers that exist beyond the desktop taxonomy — mobile-native
+# additions. They are real, have schemas, and ship to the model.
+HERMES_MOBILE_ADDITIONS = frozenset(
+    {
+        "browser_current_page",
+        "calculate",
+        "delegate_tasks",
+        "get_time",
+        "kanban_move",
+        "list_files",
+        "project_create",
+        "project_list",
+        "project_switch",
+        "session_read",
+    }
+)
+
+
+def registry_integrity(implemented_names) -> Dict[str, List[str]]:
+    """Reconcile the declared registry against the actually implemented
+    handlers. Returns a dict of inconsistencies; all empty lists mean the
+    registry is the single source of truth.
+
+    - ``declared_without_handler``: in HERMES_CORE_TOOLS but neither
+      implemented nor listed in HERMES_UNIMPLEMENTED_TOOLS.
+    - ``implemented_but_undeclared``: implemented but not in HERMES_CORE_TOOLS
+      and not listed in HERMES_MOBILE_ADDITIONS.
+    - ``unimplemented_but_implemented``: listed as intentionally unimplemented
+      but a handler actually exists (remove it from the list).
+    - ``missing_handlers`` / ``missing_schemas``: raw symmetric diff.
+    """
+    implemented = set(implemented_names)
+    declared = set(HERMES_CORE_TOOLS)
+    return {
+        "declared_without_handler": sorted(declared - implemented - HERMES_UNIMPLEMENTED_TOOLS),
+        "implemented_but_undeclared": sorted(implemented - declared - HERMES_MOBILE_ADDITIONS),
+        "unimplemented_but_implemented": sorted(
+            name for name in HERMES_UNIMPLEMENTED_TOOLS if name in implemented
+        ),
+        "missing_handlers": sorted(declared - implemented),
+        "missing_schemas": sorted(implemented - declared),
+    }
+
+
 # Webhook-safe tools (constrained for untrusted content)
 HERMES_WEBHOOK_SAFE_TOOLS = [
     "web_search",

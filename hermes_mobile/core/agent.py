@@ -656,6 +656,23 @@ class MobileAgent:
                     f"Tool '{name}' was not approved by the user; nothing was executed."
                 )
 
+        # Skill installation installs executable Python from a local path or
+        # URL — as privileged as execute_code. It always requires explicit
+        # human approval; without a callback (e.g. delegated agents) it is
+        # denied outright. The UI install flow calls the skill manager
+        # directly, so this only gates the agent-tool path.
+        if name == "skill_manage" and (arguments or {}).get("action") == "install":
+            if self.approval_callback is None:
+                raise PermissionError(
+                    "Skill installation requires explicit user approval and is not "
+                    "allowed in this context."
+                )
+            approved = await self.approval_callback(name, arguments)
+            if not approved:
+                raise PermissionError(
+                    "Skill installation was not approved by the user; nothing was installed."
+                )
+
         # Check built-in tools first
         if name in self._builtin_tools:
             return await self._builtin_tools[name](**arguments)

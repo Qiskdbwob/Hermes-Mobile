@@ -155,20 +155,23 @@ class PairingManager:
                     for item in data:
                         code = PairingCode(**item)
                         self._codes[code.code] = code
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Corrupt codes.json silently blanking the pairing state is
+                    # a security-relevant failure (a fresh state would authorize
+                    # nobody, but stale approvals would be lost silently).
+                    logger.warning("Failed to load pairing codes %s: %s", self._codes_file, exc)
 
             if self._rate_limit_file.exists():
                 try:
                     self._rate_limits = json.loads(self._rate_limit_file.read_text())
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to load pairing rate limits: %s", exc)
 
             if self._lockout_file.exists():
                 try:
                     self._lockouts = json.loads(self._lockout_file.read_text())
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to load pairing lockouts: %s", exc)
 
     def _save(self):
         with self._lock:
