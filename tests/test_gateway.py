@@ -282,8 +282,31 @@ class TestAllowlistHelpers:
             _sync_allowlist_remove("telegram", "user_c")
 
     def test_sync_allowlist_remove_user(self):
-        with patch.dict(os.environ, {"TELEGRAM_ALLOWED_USERS": "user_a,user_b"}):
+        with (
+            patch.dict(os.environ, {"TELEGRAM_ALLOWED_USERS": "user_a,user_b"}),
+            patch("hermes_mobile.gateway.mobile_gateway.Path") as mock_path,
+        ):
+            mock_instance = MagicMock()
+            mock_instance.exists.return_value = False
+            mock_path.return_value = mock_instance
             _sync_allowlist_remove("telegram", "user_a")
+
+    def test_sync_allowlist_remove_persists(self):
+        """Removal must write back to .env AND update the running process."""
+        with (
+            patch.dict(os.environ, {"TELEGRAM_ALLOWED_USERS": "user_a,user_b"}),
+            patch("hermes_mobile.gateway.mobile_gateway.Path") as mock_path,
+        ):
+            mock_instance = MagicMock()
+            mock_instance.exists.return_value = True
+            mock_instance.read_text.return_value = "TELEGRAM_ALLOWED_USERS=user_a,user_b"
+            mock_path.return_value = mock_instance
+            _sync_allowlist_remove("telegram", "user_a")
+            written = mock_instance.write_text.call_args[0][0]
+            assert "user_a" not in written
+            assert "user_b" in written
+            # Runtime env was updated too (authorization reads os.environ).
+            assert os.environ.get("TELEGRAM_ALLOWED_USERS") == "user_b"
 
     def test_get_pairing_dir(self, temp_dir):
         import hermes_mobile.gateway.mobile_gateway as gw
@@ -777,7 +800,7 @@ class TestGatewayMisc:
         mock_adapter.send_message = AsyncMock(return_value="msg_1")
         manager.adapters = {"telegram": mock_adapter}
 
-        # Mock agent to raise an error during streaming
+        # Mock the per-session agent to raise an error during streaming
         class _RaisingAsyncGen:
             """Async generator that raises on first iteration."""
 
@@ -789,7 +812,7 @@ class TestGatewayMisc:
 
         mock_agent_instance = MagicMock()
         mock_agent_instance.run_conversation = MagicMock(return_value=_RaisingAsyncGen())
-        manager.agent = mock_agent_instance
+        mock_agent.return_value = mock_agent_instance
 
         await manager.handle_message("telegram", "chat_1", "auth_user", "hello", {})
         # Should send error message back

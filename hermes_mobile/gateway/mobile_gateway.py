@@ -63,6 +63,32 @@ def _split_allowlist(raw: str) -> List[str]:
     return [uid.strip() for uid in raw.split(",") if uid.strip()]
 
 
+def _persist_allowlist(env_var: str, ids: List[str]) -> None:
+    """Write the allowlist to BOTH the running process and the .env file.
+
+    One authoritative store: the env var drives authorization, so the in-memory
+    value and the persisted file must never diverge. Best-effort on the file
+    write (failure is logged, never raised).
+    """
+    value = ",".join(ids)
+    os.environ[env_var] = value
+    try:
+        env_path = Path(".env")
+        if not env_path.exists():
+            return
+        content = env_path.read_text()
+        lines = content.split("\n")
+        for i, line in enumerate(lines):
+            if line.startswith(f"{env_var}="):
+                lines[i] = f"{env_var}={value}"
+                break
+        else:
+            lines.append(f"{env_var}={value}")
+        env_path.write_text("\n".join(lines))
+    except Exception as exc:
+        logger.warning("Failed to persist allowlist %s: %s", env_var, exc)
+
+
 def _sync_allowlist_add(platform: str, user_id: str) -> None:
     """Add user_id to the platform allowlist env var IF one is configured."""
     env_var = _allowlist_env_for_platform(platform)
@@ -75,21 +101,7 @@ def _sync_allowlist_add(platform: str, user_id: str) -> None:
     if "*" in ids or str(user_id) in ids:
         return  # Already covered
     ids.append(str(user_id))
-    try:
-        # Save to .env file
-        env_path = Path(".env")
-        if env_path.exists():
-            content = env_path.read_text()
-            lines = content.split("\n")
-            for i, line in enumerate(lines):
-                if line.startswith(f"{env_var}="):
-                    lines[i] = f"{env_var}={','.join(ids)}"
-                    break
-            else:
-                lines.append(f"{env_var}={','.join(ids)}")
-            env_path.write_text("\n".join(lines))
-    except Exception:
-        pass  # Best-effort
+    _persist_allowlist(env_var, ids)
 
 
 def _sync_allowlist_remove(platform: str, user_id: str) -> None:
@@ -104,6 +116,7 @@ def _sync_allowlist_remove(platform: str, user_id: str) -> None:
     if str(user_id) not in ids:
         return
     ids.remove(str(user_id))
+    _persist_allowlist(env_var, ids)
 
 
 @dataclass
@@ -261,6 +274,11 @@ class PairingManager:
         """Approve a pairing code."""
         code = self._codes.get(code_str.upper())
         if not code:
+            return False
+        if code.revoked:
+            # A revoked code can never be approved, even before expiry. Without
+            # this, revoke-then-approve left the code marked approved while the
+            # authorization check still rejected it (inconsistent state).
             return False
         if code.expires_at < time.time():
             code.revoked = True
@@ -564,6 +582,30 @@ class GatewayConfig:
     allowed_users: Dict[str, List[str]] = field(default_factory=dict)
     pairing_enabled: bool = True
     streaming_enabled: bool = True
+    # Gateway sessions are a remote/untrusted input boundary. By default the
+    # shell/code-execution tools are blocked for gateway users; an operator can
+    # explicitly opt in per deployment. Enforced both at schema advertisement
+    # (blocked_tools) and at the execution boundary in _execute_tool().
+    allow_sensitive_tools: bool = False
+    max_sessions: int = 32
+    session_idle_ttl: float = 3600.0
+
+
+@dataclass
+class GatewaySession:
+    """One isolated agent + serialization lock per (platform, chat, user)."""
+
+    key: str
+    agent: MobileAgent
+    lock: asyncio.Lock
+    last_used: float
+
+
+# Tools that execute code/shell or install code. Blocked for gateway sessions
+# unless GatewayConfig.allow_sensitive_tools is explicitly enabled.
+GATEWAY_DEFAULT_BLOCKED = frozenset(
+    {"terminal", "process", "execute_code", "cronjob", "skill_manage"}
+)
 
 
 class GatewayManager:
@@ -573,27 +615,91 @@ class GatewayManager:
         self.config = config
         self.settings = get_settings()
         self.adapters: Dict[str, BasePlatformAdapter] = {}
-        self.agent: Optional[MobileAgent] = None
         self.memory_provider: Optional[MobileMemoryProvider] = None
         self.pairing_manager = get_pairing_manager()
         self._running = False
         self._tasks: List[asyncio.Task] = []
+        # Per-session agent state. A single mutable MobileAgent shared across
+        # users would leak conversation context, session ids, workspaces and
+        # process registries between users. Each session owns its own agent.
+        self._sessions: Dict[str, GatewaySession] = {}
+        self._session_registry_lock = threading.Lock()
 
     async def initialize(self):
         """Initialize gateway components."""
-        # Initialize memory provider
+        # Initialize memory provider (shared by all gateway session agents so
+        # the on-device SQLite stays single-connection).
         self.memory_provider = MobileMemoryProvider(
             db_path=self.settings.get_memory_db_path(),
             encrypt=self.settings.encrypt_memory,
         )
 
-        # Initialize agent
-        self.agent = create_mobile_agent()
-
         # Initialize pairing manager
         self.pairing_manager.cleanup_expired()
 
         logger.info("Gateway initialized")
+
+    def _create_session_agent(self) -> MobileAgent:
+        """Build an isolated agent for one gateway session.
+
+        No approval_callback is wired: there is no interactive approver on the
+        gateway. Instead the sensitive-tool decision is an explicit operator
+        policy at the config layer, and blocked_tools is enforced at the
+        execution boundary in _execute_tool().
+        """
+        blocked: Optional[set[str]] = None
+        if not self.config.allow_sensitive_tools:
+            blocked = set(GATEWAY_DEFAULT_BLOCKED)
+        return create_mobile_agent(
+            memory_provider=self.memory_provider,
+            blocked_tools=blocked,
+        )
+
+    async def _get_session(self, platform: str, chat_id: str, user_id: str) -> GatewaySession:
+        """Return the isolated agent session for (platform, chat, user).
+
+        Sessions are cached up to max_sessions and evicted when idle past
+        session_idle_ttl. Agent construction is cheap (lazy client); the heavy
+        memory provider is shared and owned by the manager.
+        """
+        key = f"{platform}:{chat_id}:{user_id}"
+        now = time.time()
+
+        with self._session_registry_lock:
+            existing = self._sessions.get(key)
+            if existing is not None:
+                existing.last_used = now
+                return existing
+
+            # Evict idle sessions first, then the LRU when at capacity.
+            idle = [
+                k
+                for k, s in self._sessions.items()
+                if now - s.last_used > self.config.session_idle_ttl
+            ]
+            for k in idle:
+                self._sessions.pop(k, None)
+            while len(self._sessions) >= max(1, self.config.max_sessions):
+                oldest_key = min(self._sessions, key=lambda k: self._sessions[k].last_used)
+                self._sessions.pop(oldest_key, None)
+
+        agent = self._create_session_agent()
+        session = GatewaySession(
+            key=key,
+            agent=agent,
+            lock=asyncio.Lock(),
+            last_used=now,
+        )
+
+        with self._session_registry_lock:
+            # Another coroutine may have created this key while we built the
+            # agent; prefer the existing session and drop the duplicate agent.
+            existing = self._sessions.get(key)
+            if existing is not None:
+                existing.last_used = now
+                return existing
+            self._sessions[key] = session
+        return session
 
     async def start(self):
         """Start the gateway."""
@@ -626,6 +732,9 @@ class GatewayManager:
 
         for adapter in self.adapters.values():
             await adapter.stop()
+
+        with self._session_registry_lock:
+            self._sessions.clear()
 
         if self.memory_provider:
             self.memory_provider.close()
@@ -678,18 +787,18 @@ class GatewayManager:
         # Check authorization
         if not self.pairing_manager.is_user_authorized(platform, user_id):
             # Request pairing
-            code = self.pairing_manager.request_pairing(
-                platform, user_id, (metadata or {}).get("user_name", "Unknown")
-            )
+            try:
+                code = self.pairing_manager.request_pairing(
+                    platform, user_id, (metadata or {}).get("user_name", "Unknown")
+                )
+            except ValueError as exc:
+                # Rate-limited / locked out: don't leak details, don't crash the
+                # adapter's update loop.
+                logger.warning("Pairing request rejected for %s/%s: %s", platform, user_id, exc)
+                return
             if code:
                 await self._send_pairing_message(platform, chat_id, code)
             return
-
-        # Create stream consumer
-        config = StreamConsumerConfig(
-            transport="edit",
-            chat_type=metadata.get("chat_type", "") if metadata else "",
-        )
 
         # Find adapter
         adapter = self.adapters.get(platform)
@@ -697,18 +806,37 @@ class GatewayManager:
             logger.error(f"No adapter for platform: {platform}")
             return
 
+        # Isolated agent per (platform, chat, user); concurrent messages to the
+        # same session are serialized so conversation state cannot interleave.
+        session = await self._get_session(platform, chat_id, user_id)
+        agent = session.agent
+
+        # Create stream consumer
+        config = StreamConsumerConfig(
+            transport="edit",
+            chat_type=metadata.get("chat_type", "") if metadata else "",
+        )
+
         consumer = GatewayStreamConsumer(adapter, chat_id, config, metadata)
+        # Start the consumer BEFORE the model stream so progressive edits happen
+        # during generation instead of after the whole response has finished.
+        consumer_task = asyncio.create_task(consumer.run())
 
-        # Run agent with streaming
         try:
-            async for chunk in self.agent.run_conversation(text, stream=True):
-                consumer.on_delta(chunk)
+            async with session.lock:
+                async for chunk in agent.run_conversation(text, stream=True):
+                    consumer.on_delta(chunk)
 
-            consumer.finish()
-            await consumer.run()
+                consumer.finish()
+            await consumer_task
 
         except Exception as e:
             logger.error(f"Error handling message: {e}")
+            try:
+                consumer.finish()
+                await consumer_task
+            except Exception:
+                pass
             await adapter.send_message(chat_id, f"Error: {str(e)}")
 
     async def _send_pairing_message(self, platform: str, chat_id: str, code: PairingCode):

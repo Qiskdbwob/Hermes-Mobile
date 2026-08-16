@@ -641,6 +641,12 @@ class MobileAgent:
 
     async def _execute_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
         """Execute a tool by name"""
+        # Execution-boundary enforcement: never trust that the caller only
+        # selected a tool from the published schema. Delegated agents, skills
+        # and future integrations must all pass through this check.
+        if name in self.blocked_tools:
+            raise PermissionError(f"Tool '{name}' is blocked in this context.")
+
         # Sensitive tools (shell terminal/process) need explicit user approval
         # before anything runs when an approval callback is wired.
         if name in self._approval_tools and self.approval_callback is not None:
@@ -2078,10 +2084,19 @@ class MobileAgent:
             )
         self._last_summarized_count = len(self.messages)
 
-    def _session_summary_input(self, messages: Optional[List[Message]]) -> str:
-        """Compose the finalization input: rolling chunk summaries + tail."""
+    def _session_summary_input(
+        self,
+        messages: Optional[List[Message]],
+        rolling_parts: Optional[List[str]] = None,
+    ) -> str:
+        """Compose the finalization input: rolling chunk summaries + tail.
+
+        ``rolling_parts`` must come from the session being finalized (captured
+        in the snapshot), never the agent's live state, because a new session
+        may already have started by the time finalization runs.
+        """
         msgs = messages if messages is not None else self.messages
-        parts = list(self._rolling_summary_parts)
+        parts = list(rolling_parts if rolling_parts is not None else self._rolling_summary_parts)
         tail = msgs[-24:] if len(msgs) > 24 else msgs
         tail_text = "\n".join(
             f"{m.role}: {str(m.content or '')[:400]}" for m in tail if m.role != "tool"
@@ -2136,18 +2151,26 @@ class MobileAgent:
             logger.warning("Fact extraction failed: %s", exc)
             return []
 
-    async def finalize_session(self, messages: Optional[List[Message]] = None) -> Dict[str, Any]:
-        """Finalize the current session: LLM summary, plaintext keyword index,
-        and stable-fact extraction into the memory harness.
+    async def finalize_session(
+        self,
+        messages: Optional[List[Message]] = None,
+        session_id: Optional[str] = None,
+        rolling_summary_parts: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Finalize a session: LLM summary, plaintext keyword index, and
+        stable-fact extraction into the memory harness.
 
-        Called when the user closes the session (new chat). Falls back to the
-        extractive summarizer when the LLM is unavailable; never raises.
-        Returns a small stats dict for tests/observability.
+        Must be callable with a fully captured snapshot (session_id, messages,
+        rolling summaries) so background finalization never depends on the
+        agent's mutable live state — a new conversation may already be running.
+        Falls back to the extractive summarizer when the LLM is unavailable;
+        never raises. Returns a small stats dict for tests/observability.
         """
         stats: Dict[str, Any] = {"finalized": False}
         if self.memory_provider is None:
             return stats
         msgs = messages if messages is not None else self.messages
+        sid = session_id or self.session_id
         if not msgs:
             return stats
         try:
@@ -2157,7 +2180,8 @@ class MobileAgent:
             if bool(getattr(self.settings, "session_summary_llm", True)):
                 try:
                     summary = await self._summarize_with_llm(
-                        self._session_summary_input(msgs), max_tokens=600
+                        self._session_summary_input(msgs, rolling_summary_parts),
+                        max_tokens=600,
                     )
                 except Exception as exc:
                     logger.warning("LLM session summary failed: %s", exc)
@@ -2170,10 +2194,8 @@ class MobileAgent:
 
             if not summary:
                 return stats
-            await self.memory_provider.upsert_session_summary(self.session_id, summary)
-            await self.memory_provider.index_session_keywords(
-                self.session_id, extract_keywords(summary)
-            )
+            await self.memory_provider.upsert_session_summary(sid, summary)
+            await self.memory_provider.index_session_keywords(sid, extract_keywords(summary))
             stats["finalized"] = True
             stats["summary_length"] = len(summary)
 
@@ -2183,7 +2205,7 @@ class MobileAgent:
             if harness is not None and stats.get("mode") == "llm":
                 facts = await self._extract_facts_from_summary(summary)
                 if facts:
-                    counts = await harness.add_candidates(self.session_id, facts)
+                    counts = await harness.add_candidates(sid, facts)
                     stats["memory"] = counts
         except Exception as exc:
             logger.warning("Session finalization failed: %s", exc)
@@ -2206,12 +2228,9 @@ class MobileAgent:
                     name=row.get("name"),
                 )
             )
-        original = self.session_id
-        self.session_id = session_id
-        try:
-            return await self.finalize_session(messages=msgs)
-        finally:
-            self.session_id = original
+        # finalize_session now takes the session identity explicitly, so there
+        # is no need (and no risk) in swapping the agent's live session_id.
+        return await self.finalize_session(messages=msgs, session_id=session_id)
 
     def _schedule_finalize(self) -> None:
         """Fire-and-forget session finalization before the conversation resets.
@@ -2226,8 +2245,20 @@ class MobileAgent:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
+        # Capture EVERYTHING finalization needs before clear_conversation resets
+        # the live state: message contents, the session identity, and the
+        # rolling summary parts. The task runs on a later loop iteration, by
+        # which time self.session_id already points at the NEW session.
         snapshot = list(self.messages)
-        loop.create_task(self.finalize_session(messages=snapshot))
+        captured_session_id = self.session_id
+        captured_rolling = list(self._rolling_summary_parts)
+        loop.create_task(
+            self.finalize_session(
+                messages=snapshot,
+                session_id=captured_session_id,
+                rolling_summary_parts=captured_rolling,
+            )
+        )
 
     def clear_conversation(self):
         """Clear conversation history"""
@@ -2245,9 +2276,16 @@ class MobileAgent:
 def create_mobile_agent(
     model: Optional[str] = None,
     provider: Optional[str] = None,
+    memory_provider: Optional[Any] = None,
+    skill_manager: Optional[Any] = None,
     **kwargs,
 ) -> MobileAgent:
-    """Factory function to create a mobile agent with default configuration"""
+    """Factory function to create a mobile agent with default configuration.
+
+    ``memory_provider`` and ``skill_manager`` may be injected to share a single
+    provider/skill store across several agents (e.g. per-session gateway
+    agents), keeping the on-device SQLite single-connection.
+    """
     settings = get_settings()
 
     # Import here to avoid circular imports
@@ -2255,15 +2293,17 @@ def create_mobile_agent(
     from hermes_mobile.skills.manager import MobileSkillManager
 
     # Initialize memory provider
-    memory_provider = MobileMemoryProvider(
-        db_path=settings.get_memory_db_path(),
-        encrypt=settings.encrypt_memory,
-    )
+    if memory_provider is None:
+        memory_provider = MobileMemoryProvider(
+            db_path=settings.get_memory_db_path(),
+            encrypt=settings.encrypt_memory,
+        )
 
     # Initialize skill manager
-    skill_manager = MobileSkillManager(
-        skills_dir=settings.get_skills_dir(),
-    )
+    if skill_manager is None:
+        skill_manager = MobileSkillManager(
+            skills_dir=settings.get_skills_dir(),
+        )
 
     agent = MobileAgent(
         model=model or settings.default_model,
